@@ -20,7 +20,7 @@
   }
 
   async function periodeOptions(selected) {
-    const r = await API.call('periodeList', {});
+    const r = await API.read('periodeList', {});
     const list = r.success ? r.data : [];
     return { list, html: list.map(p => '<option value="' + esc(p.id_periode) + '"' + (p.id_periode === selected ? ' selected' : '') + '>' + esc(p.nama_periode) + (p.status === 'DIBUKA' ? ' (DIBUKA)' : '') + '</option>').join('') };
   }
@@ -32,10 +32,9 @@
     const c = this.shell('dash');
     c.innerHTML = UI.loading('Memuat dashboard nasional…');
     const idp = this.query.get('p') || App.lapPeriode || '';
-    const [r, po] = await Promise.all([API.call('dashboardAdmin', { id_periode: idp }), periodeOptions(idp)]);
+    const [r, po] = await Promise.all([API.read('dashboardAdmin', { id_periode: idp }), periodeOptions(idp)]);
     if (!r.success) return err(c, r.message);
     const d = r.data, s = d.ringkasan, p = d.periode;
-    if (p) App.lapPeriode = p.id_periode;
     const pct = n => s.total ? Math.round(n / s.total * 1000) / 10 : 0;
     const totalRev = d.kantor.reduce((a, k) => a + (k.kategori_ditinjau || 0), 0), maxRev = s.total * (d.total_kategori || 1);
     const belumList = d.kantor.filter(k => k.status === 'BELUM');
@@ -90,7 +89,7 @@
       if (!ok) return;
       const r2 = await API.call('periodeSetStatus', { id_periode: p.id_periode, status });
       if (!r2.success) return toast(r2.message, 'error');
-      toast(r2.message); await App.refreshMe(); this.render();
+      toast(r2.message); await App.refreshMe(true); this.render(true);
     };
     if ($('#btnTutup')) $('#btnTutup').onclick = () => setStatus('DITUTUP');
     if ($('#btnBuka')) $('#btnBuka').onclick = () => setStatus('DIBUKA');
@@ -114,7 +113,7 @@
   App.route('/admin/kantor', async function () {
     const c = this.shell('kantor');
     c.innerHTML = UI.loading();
-    const r = await API.call('kantorList', {});
+    const r = await API.read('kantorList', {});
     if (!r.success) return err(c, r.message);
     const list = r.data, aktif = list.filter(k => k.aktif).length;
     c.innerHTML = this.pageHead({ eyebrow: 'Master Data', title: 'Master Data Kantor SAR', desc: 'Daftar resmi Kantor SAR sesuai urutan master. Nomor urut menentukan urutan pada dashboard, laporan, dan Excel nasional.',
@@ -165,7 +164,7 @@
   App.route('/admin/akun', async function () {
     const c = this.shell('akun');
     c.innerHTML = UI.loading();
-    const r = await API.call('operatorList', {});
+    const r = await API.read('operatorList', {});
     if (!r.success) return err(c, r.message);
     const list = r.data;
     const kantorNames = [...new Set(list.map(u => u.nama_kantor))];
@@ -216,7 +215,7 @@
   App.route('/admin/template', async function () {
     const c = this.shell('template');
     c.innerHTML = UI.loading();
-    const r = await API.call('templateList', {});
+    const r = await API.read('templateList', {});
     if (!r.success) return err(c, r.message);
     const list = r.data, terbaru = list[0];
     c.innerHTML = this.pageHead({ eyebrow: 'Direktorat Sarana & Prasarana', title: 'Master Template Usulan Kebutuhan', desc: 'Template resmi menstandarkan nomenklatur, hierarki, dan satuan. Template yang sudah dipakai periode tidak diubah; unggahan baru selalu menjadi versi baru.' }) +
@@ -307,7 +306,7 @@
   App.route('/admin/periode', async function () {
     const c = this.shell('periode');
     c.innerHTML = UI.loading();
-    const [r, rt] = await Promise.all([API.call('periodeList', {}), API.call('templateList', {})]);
+    const [r, rt] = await Promise.all([API.read('periodeList', {}), API.read('templateList', {})]);
     if (!r.success) return err(c, r.message);
     const list = r.data, tpls = rt.success ? rt.data : [];
     c.innerHTML = this.pageHead({ eyebrow: 'Siklus Pendataan', title: 'Periode Pendataan', desc: 'Hanya satu periode yang dapat berstatus DIBUKA pada satu waktu. Periode yang ditutup mengunci isian Operator; Admin tetap dapat mengelola data.',
@@ -328,7 +327,7 @@
       if (!ok) return;
       const r2 = await API.call('periodeSetStatus', { id_periode: p.id_periode, status: st });
       if (!r2.success) return toast(r2.message, 'error');
-      toast(r2.message); await App.refreshMe(); App.render();
+      toast(r2.message); await App.refreshMe(true); App.render(true);
     });
     const form = (p) => {
       const thn = new Date().getFullYear() + 1;
@@ -358,7 +357,7 @@
   App.route('/admin/riwayat', async function () {
     const c = this.shell('riwayat');
     c.innerHTML = UI.loading();
-    const [rk, po] = await Promise.all([API.call('kantorList', {}), periodeOptions('')]);
+    const [rk, po] = await Promise.all([API.read('kantorList', {}), periodeOptions('')]);
     const kantor = rk.success ? rk.data : [];
     c.innerHTML = this.pageHead({ eyebrow: 'Audit', title: 'Riwayat Perubahan Data', desc: 'Log seluruh perubahan oleh Admin maupun Operator: waktu, akun, Kantor SAR, item peralatan, nilai sebelum dan sesudah.' }) +
       '<div class="card"><div class="toolbar">' +
@@ -371,7 +370,7 @@
     let offset = 0; const limit = 100; let usersLoaded = false;
     const load = async () => {
       $('#tbl').innerHTML = UI.loading();
-      const r = await API.call('riwayatList', { id_kantor: $('#fk').value, id_periode: $('#fp').value, username: $('#fu').value, aksi: $('#fa').value, dari: $('#fd').value, sampai: $('#fs').value, q: $('#fq').value, offset, limit });
+      const r = await API.read('riwayatList', { id_kantor: $('#fk').value, id_periode: $('#fp').value, username: $('#fu').value, aksi: $('#fa').value, dari: $('#fd').value, sampai: $('#fs').value, q: $('#fq').value, offset, limit });
       if (!r.success) return err($('#tbl'), r.message);
       const d = r.data;
       if (!usersLoaded) { $('#fu').innerHTML += d.usernames.map(u => '<option>' + esc(u) + '</option>').join(''); usersLoaded = true; }

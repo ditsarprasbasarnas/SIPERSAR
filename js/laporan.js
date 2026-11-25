@@ -6,14 +6,14 @@
 (function (global) {
   'use strict';
   const { icon, esc, $, $$, fmt, toast, busy, badge } = UI;
-  const CACHE = {};
-
-  async function loadLap(idp, force) {
-    const key = idp || '_default';
-    if (!force && CACHE[key]) return CACHE[key];
-    const r = await API.call('laporanData', { id_periode: idp });
+  /** Data laporan dari cache (stale-while-revalidate) + indeks turunan di memori. */
+  const IDX = new WeakMap();
+  async function loadLap(idp) {
+    const r = await API.read('laporanData', { id_periode: idp || '' });
     if (!r.success) throw new Error(r.message);
-    const lap = r.data;
+    const raw = r.data;
+    if (IDX.has(raw)) return IDX.get(raw);
+    const lap = Object.assign({}, raw);
     lap.tpl = await API.template(lap.periode.id_template);
     lap.agg = {}; lap.agregat.forEach(a => { lap.agg[a.kode_item] = a; });
     lap.kMap = {}; lap.kantor.forEach(k => { lap.kMap[k.id_kantor] = k; });
@@ -23,8 +23,7 @@
       (lap.byItem[o.kode_item] = lap.byItem[o.kode_item] || []).push(o);
       (lap.byKantor[o.id_kantor] = lap.byKantor[o.id_kantor] || {})[o.kode_item] = o;
     });
-    CACHE[key] = lap; CACHE[lap.periode.id_periode] = lap;
-    App.lapPeriode = lap.periode.id_periode;
+    IDX.set(raw, lap);
     return lap;
   }
 
@@ -42,7 +41,7 @@
       '<a href="#" id="lihatTunda" class="small nowrap" style="font-weight:600">Lihat ' + (lap.jumlah_kantor_aktif - lap.jumlah_dikirim) + ' Kantor tertunda →</a></div><div id="lapBody"></div>';
     c.innerHTML = head;
     $('#selP').onchange = e => { App.lapPeriode = e.target.value; app.render(); };
-    $('#btnRf').onclick = async () => { await loadLap(lap.periode.id_periode, true); app.render(); };
+    $('#btnRf').onclick = async () => { await API.read('laporanData', { id_periode: App.lapPeriode || '' }, { force: true }); app.render(true); };
     $('#lihatTunda').onclick = e => {
       e.preventDefault();
       const t = lap.kantor.filter(k => k.aktif && k.status !== 'DIKIRIM');
@@ -216,5 +215,5 @@
     draw();
   }, { role: 'ADMIN' });
 
-  global.Laporan = { loadLap, clear() { Object.keys(CACHE).forEach(k => delete CACHE[k]); } };
+  global.Laporan = { loadLap };
 })(window);

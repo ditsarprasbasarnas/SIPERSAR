@@ -12,14 +12,73 @@
 
   const P = {
     /** Muat data pendataan + template. ctx: {mode, id_kantor, id_periode} */
+    keyData(ctx) { return { id_periode: ctx.id_periode || '', id_kantor: ctx.mode === 'ADMIN' ? ctx.id_kantor : '' }; },
     async load(ctx) {
-      const r = await API.call('pendataanGet', { id_periode: ctx.id_periode, id_kantor: ctx.id_kantor });
+      const r = await API.read('pendataanGet', P.keyData(ctx));
       if (!r.success) throw new Error(r.message);
-      const d = r.data;
+      const d = Object.assign({}, r.data);
       d.tpl = await API.template(d.periode.id_template);
       d.itemMap = {}; d.items.forEach(x => { d.itemMap[x.kode_item] = x; });
       return d;
     },
+    // ----------------------------------------------------------
+    // OPTIMISTIC UI: ubah cache seketika → kirim ke server lewat antrean
+    // ----------------------------------------------------------
+    versi: {},
+    pkey(d) { return d.periode.id_periode + '|' + d.kantor.id_kantor; },
+    /**
+     * opts: { action, payload(versi) → data, patch(raw), pesan, onOk(r), onFail(r) }
+     * patch mengubah salinan data pendataanGet yang langsung dipakai tampilan.
+     */
+    queue(ctx, d, opts) {
+      const kd = this.keyData(ctx), pk = this.pkey(d);
+      if (this.versi[pk] === undefined) { const c = API.peek('pendataanGet', kd); const pd = (c && c.pendataan) || d.pendataan; this.versi[pk] = pd ? Number(pd.versi_data) || 0 : 0; }
+      // 1) UI instan: tambal cache lalu render
+      const raw = JSON.parse(JSON.stringify(API.peek('pendataanGet', kd) || {}));
+      if (!raw.pendataan) raw.pendataan = { id_pendataan: '', id_periode: d.periode.id_periode, id_kantor: d.kantor.id_kantor, status: 'DRAFT', nama_kepala: '', nip_kepala: '', pangkat_golongan_kepala: '', dikirim_pada: '', dikirim_oleh: '', versi_data: 0 };
+      raw.items = raw.items || []; raw.review = raw.review || {};
+      opts.patch(raw);
+      raw.pendataan.disimpan_terakhir = new Date().toISOString();
+      raw.pendataan.disimpan_oleh = App.user.username;
+      if (App.user.role === 'OPERATOR' && raw.pendataan.status === 'DIKIRIM') raw.pendataan.status = 'DRAFT';
+      raw._optimistis = true;
+      API.hold('pendataanGet', kd, true);
+      API.put('pendataanGet', kd, raw);
+      // 2) Sinkron latar belakang (berurutan, versi data terbaru dipakai saat giliran tiba)
+      return API.sync.push(async () => {
+        const res = await API.call(opts.action, opts.payload(this.versi[pk]), { silent: true });
+        const sisa = API.hold('pendataanGet', kd, false);
+        if (res.success) {
+          if (res.data && res.data.pendataan) this.versi[pk] = Number(res.data.pendataan.versi_data) || 0;
+          if (sisa <= 0 && res.data && res.data.pendataan) API.put('pendataanGet', kd, res.data, true);
+          if (/DRAFT/.test(res.message || '')) toast(res.message, 'warn');
+          if (opts.onOk) opts.onOk(res);
+        } else {
+          delete this.versi[pk];
+          if (opts.onFail) opts.onFail(res);
+          this.gagal(res, ctx);
+          if (sisa <= 0) API.read('pendataanGet', kd, { force: true }).then(() => API.put('pendataanGet', kd, API.peek('pendataanGet', kd), true));
+        }
+        return res;
+      });
+    },
+    gagal(res, ctx) {
+      if (res.code === 'VERSI_KONFLIK') {
+        UI.modal({ title: 'Data diperbarui akun lain', icon: 'refresh', dismiss: false,
+          body: '<p>' + esc(res.message) + '</p><p class="small muted">Isian Anda tetap tersimpan sebagai <b>draf di perangkat ini</b> dan dapat dipulihkan setelah data dimuat ulang.</p>',
+          buttons: [{ label: 'Muat Ulang Data', cls: 'btn-primary', icon: 'refresh', onClick: () => { App.render(true); } }] });
+      } else toast('Gagal menyimpan ke server: ' + res.message + ' Isian disimpan sebagai draf di perangkat ini.', 'error', 12000);
+    },
+    // ---- draf isian di localStorage (tidak hilang bila tab tertutup / gagal sinkron) ----
+    draftKey(d, kat) { return 'sipersar_draft:' + App.user.id_user + ':' + this.pkey(d) + ':' + kat; },
+    saveDraft(d, kat, cur) { try { localStorage.setItem(this.draftKey(d, kat), JSON.stringify({ t: Date.now(), cur })); } catch (e) { /* abaikan */ } },
+    loadDraft(d, kat) { try { return JSON.parse(localStorage.getItem(this.draftKey(d, kat)) || 'null'); } catch (e) { return null; } },
+    clearDraft(d, kat) { try { localStorage.removeItem(this.draftKey(d, kat)); } catch (e) { /* abaikan */ } },
+    /** Tunggu seluruh antrean tulis selesai (sebelum Kirim / ubah Kepala / Salin). */
+    async flush(btn) {
+      if (API.sync.pending > 0) { if (btn) busy(btn, true, 'Menunggu sinkronisasi…'); await API.sync.chain; if (btn) busy(btn, false); }
+    },
+
     reviewDone(d) { return d.tpl.kategori.filter(k => d.review[k.kode_kategori] && d.review[k.kode_kategori].selesai).length; },
     itemCount(d, k) { return k.itemKodes.filter(kd => d.itemMap[kd]).length; },
 
@@ -86,11 +145,12 @@
       };
       const bindRev = () => $$('[data-rev]').forEach(b => b.onclick = async () => {
         const kode = b.dataset.rev, selesai = b.dataset.val === '1';
-        busy(b, true, '');
-        const r = await API.call('pendataanSetReview', { id_periode: d.periode.id_periode, kode_kategori: kode, selesai });
-        if (!r.success) { busy(b, false); return toast(r.message, 'error'); }
-        toast(r.message, r.message.indexOf('DRAFT') >= 0 ? 'warn' : 'success');
-        this.listPage(c, ctx);
+        if (d.pendataan && d.pendataan.status === 'DIKIRIM' && !(await UI.confirmDialog({ title: 'Ubah data yang sudah dikirim?', body: '<p>Status kembali menjadi <b>DRAFT</b> dan pendataan wajib dikirim ulang.</p>', ok: 'Ya, Lanjutkan' }))) return;
+        this.queue(ctx, d, {
+          action: 'pendataanSetReview', payload: () => ({ id_periode: d.periode.id_periode, kode_kategori: kode, selesai }),
+          patch: raw => { raw.review[kode] = { selesai, ditinjau_pada: new Date().toISOString(), ditinjau_oleh: App.user.username }; }
+        });
+        const y = window.scrollY; await this.listPage(c, ctx); window.scrollTo(0, y);
       });
       $('#q').oninput = UI.debounce(renderList, 200);
       $('#fStatus').onchange = renderList;
@@ -234,14 +294,29 @@
       };
       $$('#fb tr.r-item').forEach(paint);
 
+      // draf otomatis ke perangkat (Prinsip 2: LocalStorage)
+      const simpanDraf = UI.debounce(() => { if (isDirty()) this.saveDraft(d, k.kode_kategori, cur); else this.clearDraft(d, k.kode_kategori); }, 400);
       if (editable) {
+        const draf = this.loadDraft(d, k.kode_kategori);
+        const beda = draf && draf.cur && k.itemKodes.some(kd => draf.cur[kd] && ['E', 'G', 'H', 'J', 'K'].some(f => (draf.cur[kd][f] || '') !== orig[kd][f]));
+        if (beda) {
+          $('#konflik').innerHTML = '<div class="alert alert-warn" style="margin-bottom:12px">' + icon('save') + '<div style="flex:1"><b>Ada draf isian yang belum tersimpan ke server</b>Draf terakhir di perangkat ini: ' + fmt.dt(new Date(draf.t).toISOString()) + '. Pulihkan untuk melanjutkan, lalu simpan.</div>' +
+            '<button class="btn btn-primary btn-sm" id="btnDrafOk">' + icon('refresh', 'sm') + 'Pulihkan Draf</button><button class="btn btn-ghost btn-sm" id="btnDrafX">Buang</button></div>';
+          $('#btnDrafOk').onclick = () => {
+            k.itemKodes.forEach(kd => { if (draf.cur[kd]) cur[kd] = Object.assign({ E: '', G: '', H: '', J: '', K: '' }, draf.cur[kd]); });
+            $('#fb').innerHTML = k.rows.map(rowHtml).join('');
+            $$('#fb tr.r-item').forEach(paint); updateBar(); $('#konflik').innerHTML = '';
+            toast('Draf dipulihkan. Periksa lalu simpan kategori.', 'info');
+          };
+          $('#btnDrafX').onclick = () => { this.clearDraft(d, k.kode_kategori); $('#konflik').innerHTML = ''; };
+        } else if (draf) this.clearDraft(d, k.kode_kategori);
         $('#fb').addEventListener('input', e => {
           const inp = e.target; if (!inp.dataset.f) return;
           const tr = inp.closest('tr'), kd = tr.dataset.k;
           if (inp.dataset.f === 'E' || inp.dataset.f === 'H') { const cleaned = inp.value.replace(/[^\d]/g, ''); if (cleaned !== inp.value && !/[.,\-]/.test(inp.value)) inp.value = cleaned; }
           cur[kd][inp.dataset.f] = inp.dataset.f === 'E' || inp.dataset.f === 'H' ? inp.value.trim() : inp.value;
           delete serverErr[kd];
-          paint(tr); updateBar();
+          paint(tr); updateBar(); simpanDraf();
         });
         $('#fb').addEventListener('keydown', e => {
           const inp = e.target; if (!inp.dataset || !inp.dataset.f || e.key !== 'Enter' || inp.tagName === 'TEXTAREA') return;
@@ -288,6 +363,7 @@
       const reload = () => this.formPage(c, ctx, kodeKat);
       $('#btnReset').onclick = async () => {
         if (isDirty() && !(await UI.confirmDialog({ title: 'Batalkan perubahan?', body: '<p>Semua isian yang belum disimpan pada kategori ini akan dikembalikan ke data tersimpan terakhir.</p>', ok: 'Ya, Reset', okCls: 'btn-danger' }))) return;
+        this.clearDraft(d, k.kode_kategori);
         App.guard = null; reload();
       };
       const doSave = async (tandai, btn) => {
@@ -319,33 +395,36 @@
         }
         const items = [];
         k.itemKodes.forEach(kd => { const v = cur[kd]; if (/^\d+$/.test(v.E) && Number(v.E) > 0) items.push({ kode_item: kd, jml_kebutuhan: v.E, rencana_alokasi: v.G.trim(), jml_kondisi: v.H, penempatan_saat_ini: v.J.trim(), justifikasi: v.K.trim() }); });
-        busy(btn, true, 'Menyimpan…');
-        const r = await API.call('pendataanSimpanKategori', { id_periode: d.periode.id_periode, id_kantor: d.kantor.id_kantor, kode_kategori: k.kode_kategori, items, versi_data: d.pendataan ? d.pendataan.versi_data : 0, tandai_selesai: !!tandai });
-        busy(btn, false);
-        if (!r.success) {
-          if (r.code === 'VERSI_KONFLIK') {
-            $('#konflik').innerHTML = '<div class="alert alert-warn" style="margin-bottom:12px">' + icon('refresh') + '<div style="flex:1"><b>Data telah diperbarui oleh ' + esc(r.detail && r.detail.disimpan_oleh || 'akun lain') + (r.detail && r.detail.disimpan_terakhir ? ' pada ' + fmt.dt(r.detail.disimpan_terakhir) : '') + '</b>' + esc(r.message) + '</div><button class="btn btn-primary btn-sm" id="btnReload">' + icon('refresh', 'sm') + 'Muat Ulang Data</button></div>';
-            $('#btnReload').onclick = () => { App.guard = null; reload(); };
-            window.scrollTo(0, 0);
-          } else if (r.code === 'VALIDASI_BARIS') {
-            serverErr = r.detail || {};
-            $$('#fb tr.r-item').forEach(paint);
-          }
-          return toast(r.message, 'error');
-        }
+        // ✅ Optimistic: tampilan langsung tersimpan, sinkron ke server di latar belakang
+        const snapshot = JSON.parse(JSON.stringify(cur));
+        const now = new Date().toISOString();
+        this.queue(ctx, d, {
+          action: 'pendataanSimpanKategori',
+          payload: versi => ({ id_periode: d.periode.id_periode, id_kantor: d.kantor.id_kantor, kode_kategori: k.kode_kategori, items, versi_data: versi, tandai_selesai: !!tandai }),
+          patch: raw => {
+            const set = new Set(k.itemKodes);
+            raw.items = raw.items.filter(x => !set.has(x.kode_item)).concat(items.map(x => ({ kode_item: x.kode_item, jml_kebutuhan: Number(x.jml_kebutuhan),
+              rencana_alokasi: x.rencana_alokasi, jml_kondisi: x.jml_kondisi === '' ? '' : Number(x.jml_kondisi), penempatan_saat_ini: x.penempatan_saat_ini, justifikasi: x.justifikasi, diubah_pada: now, diubah_oleh: App.user.username })));
+            if (tandai && !admin) raw.review[k.kode_kategori] = { selesai: true, ditinjau_pada: now, ditinjau_oleh: App.user.username };
+          },
+          onOk: () => { this.clearDraft(d, k.kode_kategori); },
+          onFail: () => { this.saveDraft(d, k.kode_kategori, snapshot); }
+        });
+        this.clearDraft(d, k.kode_kategori);
         App.guard = null;
-        toast(r.message, r.message.indexOf('DRAFT') >= 0 ? 'warn' : 'success');
-        this.formPage(c, ctx, kodeKat);
+        toast(items.length + ' item disimpan' + (tandai && !admin ? ' · ditandai Selesai Ditinjau' : '') + '. Sinkronisasi berjalan di latar belakang.', 'success', 2500);
+        if (tandai && !admin && next) { App.go(ctx.base + '/' + encodeURIComponent(next.kode_kategori)); return; }
+        const y = window.scrollY; await this.formPage(c, ctx, kodeKat); window.scrollTo(0, y);
       };
       $('#btnSave').onclick = e => doSave(false, e.currentTarget);
       if ($('#btnSaveRev')) $('#btnSaveRev').onclick = e => doSave(true, e.currentTarget);
       if ($('#btnUnrev')) $('#btnUnrev').onclick = async e => {
         if (isDirty()) return toast('Simpan atau reset perubahan terlebih dahulu.', 'warn');
-        const btn = e.currentTarget; busy(btn, true, '');
-        const r = await API.call('pendataanSetReview', { id_periode: d.periode.id_periode, kode_kategori: k.kode_kategori, selesai: false });
-        busy(btn, false);
-        if (!r.success) return toast(r.message, 'error');
-        toast(r.message, 'warn'); reload();
+        this.queue(ctx, d, {
+          action: 'pendataanSetReview', payload: () => ({ id_periode: d.periode.id_periode, kode_kategori: k.kode_kategori, selesai: false }),
+          patch: raw => { raw.review[k.kode_kategori] = { selesai: false, ditinjau_pada: new Date().toISOString(), ditinjau_oleh: App.user.username }; }
+        });
+        toast('Tanda Selesai Ditinjau dibatalkan.', 'warn', 2500); reload();
       };
     },
 
@@ -375,6 +454,16 @@
       return '<div class="table-wrap"><table class="tbl"><thead><tr><th class="c">No</th><th>Nama Sarana dan/ Peralatan SAR</th><th class="r">Kebutuhan (E)</th><th class="c">Satuan (F)</th><th>Rencana Alokasi (G)</th><th class="r">Kondisi (H)</th><th class="c">Satuan (I)</th><th>Penempatan Saat Ini (J)</th><th>Justifikasi (K)</th></tr></thead><tbody>' + body + '</tbody></table></div>';
     }
   };
+
+  // Lacak versi data terbaru dari setiap respons server & sebarkan hasil tulis ke cache terkait
+  API.onResponse((action, data) => {
+    if (!data || !data.pendataan || !data.periode || !data.kantor || !Array.isArray(data.items)) return;
+    const pk = data.periode.id_periode + '|' + data.kantor.id_kantor, v = Number(data.pendataan.versi_data) || 0;
+    if (P.versi[pk] !== undefined && v > P.versi[pk]) P.versi[pk] = v;
+    if (['pendataanSimpanKepala', 'pendataanKirim', 'pendataanSimpanKategori', 'pendataanSetReview'].indexOf(action) >= 0) {
+      API.putMatching('pendataanGet', x => x && x.periode && x.kantor && x.periode.id_periode === data.periode.id_periode && x.kantor.id_kantor === data.kantor.id_kantor, data);
+    }
+  });
 
   global.Pendataan = P;
 })(window);

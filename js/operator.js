@@ -24,6 +24,7 @@
             if (!/^\d{18}$/.test(v.nip_kepala)) err.nip_kepala = 'NIP harus 18 digit angka.';
             if (!v.pangkat_golongan_kepala) err.pangkat_golongan_kepala = 'Wajib diisi.';
             UI.fieldErrors(f, err); if (Object.keys(err).length) return false;
+            await Pendataan.flush(btn);
             busy(btn, true, 'Menyimpan…');
             const r = await API.call('pendataanSimpanKepala', Object.assign({}, ids, v));
             busy(btn, false);
@@ -36,6 +37,7 @@
     },
 
     async downloadExcel(idPeriode, btn) {
+      await Pendataan.flush(btn);
       busy(btn, true, 'Menyiapkan…');
       try {
         const d = await Pendataan.load({ id_periode: idPeriode });
@@ -53,7 +55,7 @@
   App.route('/dashboard', async function () {
     const c = this.shell('dash');
     c.innerHTML = UI.loading();
-    const r = await API.call('dashboardOperator', {});
+    const r = await API.read('dashboardOperator', {});
     if (!r.success) { c.innerHTML = '<div class="alert alert-err">' + icon('alert') + '<div>' + esc(r.message) + '</div></div>'; return; }
     const d = r.data, u = d.user || this.user;
     if (!d.periode) {
@@ -168,7 +170,8 @@
     if (window.matchMedia('(max-width: 1023px)').matches) $('#kgrid').style.gridTemplateColumns = 'minmax(0,1fr)';
     if ($('#btnXls')) $('#btnXls').onclick = e => Operator.downloadExcel(d.periode.id_periode, e.currentTarget);
     if ($('#btnKep')) $('#btnKep').onclick = () => Operator.kepalaModal(d, { id_periode: d.periode.id_periode }, () => this.render());
-    $('#btnKirim').onclick = () => {
+    $('#btnKirim').onclick = async (e) => {
+      await Pendataan.flush(e.currentTarget);
       UI.modal({
         title: 'Konfirmasi Pengiriman Usulan', sub: 'Rencana Kebutuhan Sarpras · ' + d.periode.nama_periode, icon: 'send',
         body: '<div class="kv-box" style="margin-bottom:14px"><dl class="kv"><dt>Satuan Kerja</dt><dd>' + esc(d.kantor.nama_kantor) + '</dd><dt>Kepala Kantor</dt><dd>' + esc(pd.nama_kepala) + '</dd><dt>Volume Usulan</dt><dd style="color:var(--burnt)">' + d.items.length + ' item sarana & peralatan</dd></dl></div>' +
@@ -194,7 +197,7 @@
   App.route('/riwayat', async function () {
     const c = this.shell('riwayat');
     c.innerHTML = UI.loading();
-    const r = await API.call('pendataanRiwayat', {});
+    const r = await API.read('pendataanRiwayat', {});
     if (!r.success) { c.innerHTML = '<div class="alert alert-err">' + icon('alert') + '<div>' + esc(r.message) + '</div></div>'; return; }
     const rows = r.data, aktif = rows.find(x => x.periode.status === 'DIBUKA');
     const arsip = rows.filter(x => x.pendataan).length, kirim = rows.filter(x => x.pendataan && x.pendataan.status === 'DIKIRIM').length;
@@ -224,6 +227,7 @@
           body: '<p><b>' + asal.jumlah_item + ' item</b> usulan beserta identitas Kepala Kantor akan disalin sebagai DRAFT ke periode berjalan. Item yang tidak ada lagi di template baru tidak ikut tersalin.</p>', ok: 'Salin Data' });
         if (!ok) return;
       }
+      await Pendataan.flush();
       const r2 = await API.call('pendataanSalin', { id_periode_asal: idAsal, timpa });
       if (!r2.success) return toast(r2.message, 'error');
       if (r2.data && r2.data.perlu_konfirmasi) {
@@ -232,7 +236,7 @@
         return;
       }
       UI.modal({ title: 'Penyalinan selesai', icon: 'checkc', body: '<p>' + esc(r2.message) + '</p>' + (r2.data.dilewati && r2.data.dilewati.length ? '<div class="kv-box small"><b>Tidak tersalin:</b><ul>' + r2.data.dilewati.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul></div>' : ''),
-        buttons: [{ label: 'Buka Pendataan', cls: 'btn-primary', onClick: () => App.go('#/pendataan') }] });
+        buttons: [{ label: 'Buka Pendataan', cls: 'btn-primary', onClick: async () => { await API.read('pendataanGet', {}, { force: true }); App.go('#/pendataan'); } }] });
     };
   }, { role: 'OPERATOR' });
 

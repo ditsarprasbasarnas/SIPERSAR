@@ -161,7 +161,12 @@
     else { btn.disabled = false; if (btn.dataset.html) btn.innerHTML = btn.dataset.html; }
   }
   function debounce(fn, ms) { let t; return function () { clearTimeout(t); const a = arguments; t = setTimeout(() => fn.apply(this, a), ms || 250); }; }
-  function loading(text) { return '<div class="loading-block"><div class="spinner"></div><div>' + esc(text || 'Memuat data…') + '</div></div>'; }
+  /** Kerangka (skeleton) — hanya muncul saat data belum pernah dimuat sama sekali. */
+  function loading(text) {
+    return '<div class="skel-page" aria-busy="true"><div class="skeleton" style="height:14px;width:180px"></div><div class="skeleton" style="height:30px;width:min(520px,80%);margin:10px 0 22px"></div>' +
+      '<div class="grid g3" style="margin-bottom:16px"><div class="skeleton" style="height:110px"></div><div class="skeleton" style="height:110px"></div><div class="skeleton" style="height:110px"></div></div>' +
+      '<div class="skeleton" style="height:320px"></div><div class="small muted" style="margin-top:10px;display:flex;gap:8px;align-items:center"><span class="spinner sm"></span>' + esc(text || 'Memuat data…') + '</div></div>';
+  }
   function emptyState(text, ic) { return '<div class="empty">' + icon(ic || 'package') + '<div>' + esc(text) + '</div></div>'; }
   function fieldErrors(form, detail) {
     $$('.field-err', form).forEach(e => e.textContent = '');

@@ -7,30 +7,100 @@
 
   const App = {
     user: null, periode: null, routes: [], current: null, guard: null, lastHash: '',
+    renderKeys: new Set(), interacted: false, renderSeq: 0, pendingUpdate: false,
 
     route(pattern, handler, opts) { this.routes.push({ re: new RegExp('^' + pattern.replace(/:(\w+)/g, '([^/]+)') + '$'), handler, opts: opts || {} }); },
     go(hash) { if (location.hash === hash) this.render(); else location.hash = hash; },
+    /** Dipanggil API.read: mencatat data yang dipakai halaman aktif. */
+    useKey(k) { this.renderKeys.add(k); },
 
     async start() {
       if (!API.configured()) return this.renderSetupNotice();
       window.addEventListener('hashchange', () => this.onHash());
-      window.addEventListener('beforeunload', e => { if (this.guard && this.guard()) { e.preventDefault(); e.returnValue = ''; } });
+      window.addEventListener('beforeunload', e => {
+        if ((this.guard && this.guard()) || API.sync.pending > 0) { e.preventDefault(); e.returnValue = ''; }
+      });
+      // data baru dari latar belakang → perbarui halaman aktif secara senyap
+      API.onUpdate(k => this.onDataUpdate(k));
+      API.sync.on(s => this.paintSync(s));
+      // interaksi pengguna di halaman → jangan render ulang otomatis
+      ['input', 'change', 'click'].forEach(ev => document.addEventListener(ev, e => {
+        const c = document.getElementById('content');
+        if (c && c.contains(e.target) && !(ev === 'click' && e.target.closest('a[href^="#"]'))) this.interacted = true;
+      }, true));
+      // prefetch saat kursor/sentuhan berada di menu (sebelum diklik)
+      ['mouseover', 'touchstart'].forEach(ev => document.addEventListener(ev, e => {
+        const a = e.target.closest && e.target.closest('.nav a[href^="#"], a[data-prefetch]');
+        if (a) this.prefetchHash(a.getAttribute('href'));
+      }, { passive: true }));
+
       if (API.getToken()) {
-        const r = await API.call('me', {}, { noAuthRedirect: true });
-        if (r.success) { this.user = r.data.user; this.periode = r.data.periode_aktif; }
-        else if (r.code === 'WAJIB_GANTI_PASSWORD') { this.user = { wajib_ganti_password: true }; }
-        else if (r.code === 'JARINGAN') { this.hideBoot(); $('#root').innerHTML = this.errorPage(r.message); return; }
-        else API.clearToken();
+        const cached = API.loadUser();
+        if (cached && cached.user && cached.user.id_user) {
+          // ✅ Boot instan: tampilkan dari identitas tersimpan, verifikasi sesi di latar
+          this.user = cached.user; this.periode = cached.periode;
+          this.verifySession();
+        } else {
+          const r = await API.call('me', {}, { noAuthRedirect: true });
+          if (r.success) { this.setMe(r.data); }
+          else if (r.code === 'WAJIB_GANTI_PASSWORD') { this.user = { wajib_ganti_password: true }; }
+          else if (r.code === 'JARINGAN') { this.hideBoot(); $('#root').innerHTML = this.errorPage(r.message); return; }
+          else API.clearToken();
+        }
       }
       this.hideBoot();
       this.lastHash = location.hash;
       this.render();
+      if (this.user && this.user.role) this.prefetchRole();
     },
     hideBoot() { const b = $('#boot'); if (b) b.remove(); },
 
+    setMe(d) {
+      this.user = d.user; this.periode = d.periode_aktif || null;
+      API.saveUser(this.user, this.periode);
+    },
+    async verifySession() {
+      const r = await API.call('me', {}, { noAuthRedirect: true, silent: true });
+      if (r.success) {
+        const before = JSON.stringify([this.user, this.periode]);
+        this.setMe(r.data);
+        if (before !== JSON.stringify([this.user, this.periode]) && this.user.role) this.refreshChrome();
+      } else if (r.code === 'SESI_HABIS') this.sessionExpired(r.message);
+      else if (r.code === 'WAJIB_GANTI_PASSWORD') { this.user.wajib_ganti_password = true; this.go('#/ganti-password'); }
+    },
+
+    /** Prefetch data utama per peran dalam SATU permintaan batch (Prinsip 4). */
+    prefetchRole() {
+      if (!this.user || !this.user.role) return;
+      const calls = this.user.role === 'ADMIN'
+        ? [{ action: 'dashboardAdmin', data: {} }, { action: 'kantorList', data: {} }, { action: 'periodeList', data: {} }, { action: 'templateList', data: {} },
+          { action: 'operatorList', data: {} }, { action: 'laporanData', data: {} }, { action: 'riwayatList', data: { offset: 0, limit: 100 } }]
+        : [{ action: 'dashboardOperator', data: {} }, { action: 'pendataanGet', data: {} }, { action: 'pendataanRiwayat', data: {} }];
+      if (this.periode && this.periode.id_template && !API.hasTemplate(this.periode.id_template)) calls.push({ action: 'templateGet', data: { id_template: this.periode.id_template } });
+      API.prefetch(calls).then(() => {
+        // template periode default (bila tidak ada periode DIBUKA)
+        const d = API.peek(this.user.role === 'ADMIN' ? 'dashboardAdmin' : 'dashboardOperator', {});
+        const idt = d && d.periode && d.periode.id_template;
+        if (idt && !API.hasTemplate(idt)) API.template(idt).catch(() => {});
+      });
+    },
+    /** Prefetch data halaman tujuan saat menu disorot. */
+    prefetchHash(href) {
+      if (!this.user || !this.user.role || !href) return;
+      const map = {
+        '#/dashboard': [['dashboardOperator', {}]], '#/pendataan': [['pendataanGet', {}]], '#/kirim': [['pendataanGet', {}]], '#/riwayat': [['pendataanRiwayat', {}]],
+        '#/admin': [['dashboardAdmin', {}], ['periodeList', {}]], '#/admin/kantor': [['kantorList', {}]], '#/admin/akun': [['operatorList', {}]],
+        '#/admin/template': [['templateList', {}]], '#/admin/periode': [['periodeList', {}], ['templateList', {}]],
+        '#/admin/laporan/nasional': [['laporanData', {}], ['periodeList', {}]], '#/admin/laporan/peralatan': [['laporanData', {}], ['periodeList', {}]],
+        '#/admin/laporan/kantor': [['laporanData', {}], ['periodeList', {}]], '#/admin/riwayat': [['riwayatList', { offset: 0, limit: 100 }], ['kantorList', {}], ['periodeList', {}]]
+      };
+      const c = map[href.split('?')[0]];
+      if (c) API.prefetch(c.map(x => ({ action: x[0], data: x[1] })));
+    },
+
     async onHash() {
       if (this.guard && this.guard() && location.hash !== this.lastHash) {
-        const ok = await UI.confirmDialog({ title: 'Perubahan belum disimpan', sub: 'Isian pada kategori ini belum disimpan.', body: '<p>Jika Anda meninggalkan halaman ini, perubahan yang belum disimpan akan hilang.</p>', ok: 'Tinggalkan Halaman', okCls: 'btn-danger' });
+        const ok = await UI.confirmDialog({ title: 'Perubahan belum disimpan', sub: 'Isian pada kategori ini belum disimpan.', body: '<p>Jika Anda meninggalkan halaman ini, perubahan yang belum disimpan akan hilang (draf tetap tersimpan di perangkat ini).</p>', ok: 'Tinggalkan Halaman', okCls: 'btn-danger' });
         if (!ok) { history.replaceState(null, '', this.lastHash || '#/'); return; }
       }
       this.guard = null;
@@ -40,7 +110,8 @@
 
     homeHash() { return !this.user ? '#/login' : this.user.wajib_ganti_password ? '#/ganti-password' : this.user.role === 'ADMIN' ? '#/admin' : '#/dashboard'; },
 
-    async render() {
+    /** Render rute aktif. silent=true: render ulang karena data baru (posisi gulir dipertahankan). */
+    async render(silent) {
       document.body.classList.remove('nav-open');
       const hash = location.hash || '';
       const full = hash.replace(/^#/, '') || '/';
@@ -59,12 +130,65 @@
           if (o.role && o.role !== this.user.role) return this.go(this.homeHash());
         }
         this.current = path;
-        window.scrollTo(0, 0);
+        const y = window.scrollY, seq = ++this.renderSeq;
+        this.renderKeys = new Set(); this.interacted = false; this.pendingUpdate = false;
+        const keep = silent ? this.captureState() : null;
+        if (!silent) window.scrollTo(0, 0);
         try { await r.handler.apply(this, m.slice(1).map(decodeURIComponent)); }
         catch (err) { console.error(err); const c = $('#content'); (c || $('#root')).innerHTML = this.errorPage(err.message); }
+        if (silent && seq === this.renderSeq) { this.restoreState(keep); window.scrollTo(0, y); }
         return;
       }
       this.go(this.homeHash());
+    },
+
+    /** Simpan nilai filter/pencarian & pilihan tab agar tidak hilang saat render ulang senyap. */
+    captureState() {
+      const c = $('#content'); if (!c) return null;
+      const st = { v: {}, seg: {} };
+      $$('input[id],select[id],textarea[id]', c).forEach(el => { if (el.type !== 'file' && !el.closest('.modal')) st.v[el.id] = el.type === 'checkbox' ? el.checked : el.value; });
+      $$('.seg[id]', c).forEach(sg => { const on = sg.querySelector('button.on'); if (on) st.seg[sg.id] = Array.from(sg.children).indexOf(on); });
+      return st;
+    },
+    restoreState(st) {
+      if (!st) return;
+      Object.keys(st.v).forEach(id => {
+        const el = document.getElementById(id); if (!el) return;
+        const cur = el.type === 'checkbox' ? el.checked : el.value;
+        if (cur === st.v[id]) return;
+        if (el.type === 'checkbox') el.checked = st.v[id]; else el.value = st.v[id];
+        el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+      });
+      Object.keys(st.seg).forEach(id => { const sg = document.getElementById(id); const b = sg && sg.children[st.seg[id]]; if (b && !b.classList.contains('on')) b.click(); });
+    },
+
+    /** Data di cache berubah (hasil sinkron latar). */
+    onDataUpdate(k) {
+      if (!this.renderKeys.has(k) || !this.user) return;
+      const ae = document.activeElement, mengetik = ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && $('#content') && $('#content').contains(ae);
+      if (mengetik || (this.guard && this.guard()) || document.querySelector('.modal-bg')) { this.showUpdateChip(); return; }
+      clearTimeout(this._upd);
+      this._upd = setTimeout(() => this.render(true), 60);
+    },
+    showUpdateChip() {
+      if (this.pendingUpdate) return;
+      this.pendingUpdate = true;
+      const el = document.createElement('button');
+      el.className = 'update-chip';
+      el.innerHTML = icon('refresh', 'sm') + 'Data terbaru tersedia · Perbarui tampilan';
+      el.onclick = () => { el.remove(); if (this.guard && this.guard()) return toast('Simpan atau batalkan isian terlebih dahulu.', 'warn'); this.render(true); };
+      document.body.appendChild(el);
+      const rm = () => el.remove();
+      window.addEventListener('hashchange', rm, { once: true });
+    },
+    /** Indikator antrean sinkronisasi di topbar. */
+    paintSync(s) {
+      const el = document.getElementById('syncChip'); if (!el) return;
+      if (s.pending > 0) { el.className = 'chip sync on'; el.innerHTML = '<span class="spinner sm"></span>Menyinkronkan ' + s.pending + ' perubahan…'; }
+      else if (Date.now() - s.lastOk < 2500) {
+        el.className = 'chip sync ok'; el.innerHTML = icon('check', 'sm') + 'Tersimpan';
+        clearTimeout(this._syncT); this._syncT = setTimeout(() => { el.className = 'chip sync'; el.innerHTML = ''; }, 2500);
+      } else { el.className = 'chip sync'; el.innerHTML = ''; }
     },
 
     sessionExpired(msg) {
@@ -76,8 +200,9 @@
 
     async logout() {
       if (this.guard && this.guard()) { const ok = await UI.confirmDialog({ title: 'Keluar dari sistem?', body: '<p>Ada perubahan yang belum disimpan dan akan hilang.</p>', ok: 'Keluar', okCls: 'btn-danger' }); if (!ok) return; }
+      if (API.sync.pending > 0) { toast('Tunggu sebentar, ' + API.sync.pending + ' perubahan sedang disinkronkan…', 'warn'); await API.sync.chain; }
       this.guard = null;
-      API.call('logout', {}, { noAuthRedirect: true });
+      API.call('logout', {}, { noAuthRedirect: true, silent: true });
       API.clearToken(); this.user = null; this.periode = null;
       this.go('#/login');
     },
@@ -91,9 +216,26 @@
         '<p class="muted" style="text-align:center">Isi <b>GAS_URL</b> pada berkas <span class="kode">js/config.js</span> dengan URL Web App Google Apps Script (berakhiran <span class="kode">/exec</span>), lalu unggah ulang.</p></div></div>';
     },
 
-    // ---------------- KERANGKA TATA LETAK ----------------
-    shell(active, opts) {
-      opts = opts || {};
+    // ---------------- KERANGKA TATA LETAK (dibangun sekali, Prinsip 1) ----------------
+    chromeKey() { const u = this.user; return [u.id_user, u.role, u.nama, u.nama_kantor].join('|'); },
+    shell(active) {
+      const u = this.user, admin = u.role === 'ADMIN';
+      const app = $('#root .app');
+      if (!app || app.dataset.key !== this.chromeKey()) this.buildChrome();
+      $$('.nav a').forEach(a => a.classList.toggle('active', a.dataset.k === active));
+      this.paintPeriodeChip();
+      const c = $('#content');
+      c.innerHTML = '';
+      return c;
+    },
+    refreshChrome() { const app = $('#root .app'); if (app) { app.dataset.key = ''; this.render(true); } },
+    paintPeriodeChip() {
+      const el = $('#periodeChip'); if (!el) return;
+      const p = this.periode;
+      el.className = 'chip' + (p ? '' : ' off');
+      el.innerHTML = p ? '<span class="dot"></span>' + esc(p.nama_periode) + ' · <b style="color:var(--burnt)">DIBUKA</b>' : '<span class="dot"></span>Tidak ada periode dibuka';
+    },
+    buildChrome() {
       const u = this.user, admin = u.role === 'ADMIN';
       const nav = admin ? [
         ['sec', 'Menu Utama'], ['#/admin', 'dashboard', 'Dashboard', 'dash'], ['#/admin/kantor', 'building', 'Kantor SAR', 'kantor'],
@@ -106,25 +248,22 @@
         ['#/kirim', 'send', 'Kirim Pendataan', 'kirim'], ['#/riwayat', 'history', 'Riwayat Pendataan', 'riwayat'], ['#/profil', 'usercircle', 'Profil & Akun', 'profil']
       ];
       const navHtml = nav.map(n => n[0] === 'sec' ? '<div class="nav-sec">' + esc(n[1]) + '</div>' :
-        '<a href="' + n[0] + '" class="' + (active === n[3] ? 'active' : '') + '">' + icon(n[1]) + '<span>' + esc(n[2]) + '</span></a>').join('');
-      const p = this.periode;
-      const periodeChip = p ? '<span class="chip"><span class="dot"></span>' + esc(p.nama_periode) + ' · <b style="color:var(--burnt)">DIBUKA</b></span>'
-        : '<span class="chip off"><span class="dot"></span>Tidak ada periode dibuka</span>';
+        '<a href="' + n[0] + '" data-k="' + n[3] + '">' + icon(n[1]) + '<span>' + esc(n[2]) + '</span></a>').join('');
       const ctxChip = admin ? '' : '<span class="chip hide-md">' + icon('building', 'sm') + esc(u.nama_kantor) + '</span>';
       $('#root').innerHTML =
-        '<div class="app"><aside class="sidebar"><div class="brand"><div class="brand-logo">' + brandMark + '</div><div><b>SIPERSAR</b><span>' + (admin ? 'Dit. Sarpras · Basarnas' : 'Basarnas RI') + '</span></div></div>' +
+        '<div class="app" data-key="' + esc(this.chromeKey()) + '"><aside class="sidebar"><div class="brand"><div class="brand-logo">' + brandMark + '</div><div><b>SIPERSAR</b><span>' + (admin ? 'Dit. Sarpras · Basarnas' : 'Basarnas RI') + '</span></div></div>' +
         '<nav class="nav">' + navHtml + '</nav><div class="side-foot"><a id="btnLogout">' + icon('logout') + 'Keluar Sistem</a></div></aside>' +
         '<div class="scrim" id="scrim"></div>' +
         '<div class="main"><header class="topbar"><button class="btn btn-text btn-icon menu-btn" id="btnMenu" aria-label="Menu">' + icon('menu') + '</button>' +
         '<div class="t-title"><b>' + (admin ? 'Panel Administrasi Direktorat' : 'Portal Operator Usulan SAR') + '</b><span>Direktorat Sarana dan Prasarana Basarnas</span></div>' +
-        '<div class="t-right">' + periodeChip + ctxChip +
+        '<div class="t-right"><span id="syncChip" class="chip sync"></span><span id="periodeChip"></span>' + ctxChip +
         '<div class="user-box" id="btnUser" title="Profil"><div class="u-txt"><b>' + esc(u.nama) + '</b><span>' + (admin ? 'Admin Direktorat' : 'Operator Kantor SAR') + '</span></div><div class="avatar">' + esc(fmt.initials(u.nama)) + '</div></div>' +
         '</div></header><main class="content" id="content"></main></div></div>';
       $('#btnLogout').onclick = () => this.logout();
       $('#btnMenu').onclick = () => document.body.classList.toggle('nav-open');
       $('#scrim').onclick = () => document.body.classList.remove('nav-open');
       $('#btnUser').onclick = () => this.go('#/profil');
-      return $('#content');
+      this.paintSync(API.sync);
     },
 
     pageHead(o) {
@@ -137,7 +276,13 @@
       return '<div class="print-only print-kop"><b>BADAN NASIONAL PENCARIAN DAN PERTOLONGAN</b><b>DIREKTORAT SARANA DAN PRASARANA</b><span>' + esc(judul) + (sub ? ' — ' + esc(sub) : '') + '</span><br><span>Dicetak: ' + fmt.dt(new Date().toISOString()) + '</span></div>';
     },
 
-    async refreshMe() { const r = await API.call('me', {}); if (r.success) { this.user = r.data.user; this.periode = r.data.periode_aktif; } return r; }
+    /** Identitas dari cache, diperbarui di latar. */
+    async refreshMe(wait) {
+      if (!wait) { this.verifySession(); return { success: true }; }
+      const r = await API.call('me', {});
+      if (r.success) this.setMe(r.data);
+      return r;
+    }
   };
 
   // ============================================================
@@ -173,19 +318,20 @@
       fieldErrors(f, null); $('#loginErr').innerHTML = '';
       if (!d.username || !d.password) { fieldErrors(f, { username: !d.username ? 'Username wajib diisi.' : undefined, password: !d.password ? 'Kata sandi wajib diisi.' : undefined }); return; }
       busy(btn, true, 'Memeriksa…');
-      const r = await API.call('login', { username: d.username, password: d.password });
+      const r = await API.call('login', { username: d.username, password: d.password, bootstrap: true, punya_template: API.templateIds() });
       busy(btn, false);
       if (!r.success) { $('#loginErr').innerHTML = '<div class="alert alert-err">' + icon('alert') + '<div>' + esc(r.message) + '</div></div>'; return; }
       API.setToken(r.data.token, !!d.ingat);
-      this.user = r.data.user;
-      if (!this.user.wajib_ganti_password) await this.refreshMe();
+      this.setMe(r.data);
+      API.seed(r.data.bootstrap);
       this.go(this.homeHash());
+      if (!this.user.wajib_ganti_password) setTimeout(() => this.prefetchRole(), 50);
     };
   }, { public: true, guestOnly: true });
 
   App.route('/daftar', async function () {
     $('#root').innerHTML = '<div class="auth-page"><div class="auth-card" id="regCard">' + UI.loading('Memuat daftar Kantor SAR…') + '</div></div>';
-    const r = await API.call('kantorPublik', {});
+    const r = await API.read('kantorPublik', {});
     const kantor = r.success ? r.data : [];
     $('#regCard').innerHTML =
       '<div class="mark">' + brandMark + '</div><div style="text-align:center"><span class="chip">SIPERSAR BASARNAS</span><h2 style="margin-top:10px">Pendaftaran Akun Operator Kantor SAR</h2>' +
@@ -255,8 +401,9 @@
       busy(btn, false);
       if (!r.success) { fieldErrors(f, r.detail); $('#pwErr').innerHTML = '<div class="alert alert-err">' + icon('alert') + '<div>' + esc(r.message) + '</div></div>'; return; }
       toast('Kata sandi diperbarui. Selamat bekerja!');
-      await this.refreshMe();
+      await this.refreshMe(true);
       this.go(this.homeHash());
+      this.prefetchRole();
     };
   }, { public: true });
 
@@ -316,7 +463,7 @@
         busy(btn, true, 'Menyimpan…'); const r = await API.call('updateProfile', d); busy(btn, false);
         fieldErrors(f, r.detail);
         if (!r.success) return toast(r.message, 'error');
-        toast(r.message); this.user = r.data.user; this.render();
+        toast(r.message); this.setMe({ user: r.data.user, periode_aktif: this.periode }); this.render(true);
       };
     }
     const f2 = $('#fPw2'); bindPwForm(f2);
