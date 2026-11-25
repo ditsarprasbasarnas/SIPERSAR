@@ -19,15 +19,16 @@
   }
 
   /** Aksi baca yang hasilnya perlu diperbarui setelah aksi tulis tertentu berhasil. */
-  const P = ['pendataanGet', 'dashboardOperator', 'pendataanRiwayat', 'dashboardAdmin', 'laporanData', 'riwayatList'];
+  const P = ['pendataanGet', 'dashboardOperator', 'pendataanRiwayat', 'dashboardAdmin', 'laporanData'];
   const AFFECT = {
     pendataanSimpanKategori: P, pendataanSetReview: P, pendataanSimpanKepala: P, pendataanKirim: P, pendataanSalin: P,
-    kantorSimpan: ['kantorList', 'dashboardAdmin', 'laporanData', 'operatorList', 'riwayatList'],
-    kantorImpor: ['kantorList', 'dashboardAdmin', 'laporanData', 'operatorList', 'riwayatList'],
-    operatorSetAktif: ['operatorList', 'kantorList', 'riwayatList'], operatorResetPassword: ['operatorList', 'riwayatList'],
-    templateSimpan: ['templateList', 'riwayatList'],
-    periodeSimpan: ['periodeList', 'dashboardAdmin', 'dashboardOperator', 'pendataanGet', 'laporanData', 'pendataanRiwayat', 'riwayatList', 'me'],
-    periodeSetStatus: ['periodeList', 'dashboardAdmin', 'dashboardOperator', 'pendataanGet', 'laporanData', 'pendataanRiwayat', 'riwayatList', 'me'],
+    kantorSimpan: ['kantorList', 'dashboardAdmin', 'laporanData', 'operatorList'],
+    kantorImpor: ['kantorList', 'dashboardAdmin', 'laporanData', 'operatorList'],
+    kantorHapus: ['kantorList', 'dashboardAdmin', 'laporanData', 'operatorList', 'periodeList', 'kantorPublik'],
+    operatorSetAktif: ['operatorList', 'kantorList'], operatorResetPassword: ['operatorList'],
+    templateSimpan: ['templateList'],
+    periodeSimpan: ['periodeList', 'dashboardAdmin', 'dashboardOperator', 'pendataanGet', 'laporanData', 'pendataanRiwayat', 'me'],
+    periodeSetStatus: ['periodeList', 'dashboardAdmin', 'dashboardOperator', 'pendataanGet', 'laporanData', 'pendataanRiwayat', 'me'],
     updateProfile: ['me', 'dashboardOperator'], changePassword: ['me']
   };
 
@@ -70,6 +71,20 @@
       } catch (err) {
         return { success: false, code: 'JARINGAN', message: err.name === 'AbortError' ? 'Permintaan terlalu lama. Periksa koneksi lalu coba lagi.' : 'Tidak dapat terhubung ke server. Periksa koneksi internet Anda.' };
       } finally { clearTimeout(timer); if (!opts.silent) bar(false); }
+    }
+  };
+
+  /** Gangguan sesaat yang aman dicoba ulang (seluruh aksi tulis SIPERSAR idempoten). */
+  API.sesaat = function (r) {
+    return !r.success && (['JARINGAN', 'RESPON_INVALID', 'SIBUK'].indexOf(r.code) >= 0 || /^Terjadi kesalahan server/.test(r.message || ''));
+  };
+  /** Panggil dengan percobaan ulang otomatis (maks 3x, jeda bertambah) untuk gangguan sesaat. */
+  API.callRetry = async function (action, data, opts) {
+    let r, n = 0;
+    for (;;) {
+      r = await API.call(action, typeof data === 'function' ? data() : data, opts);
+      if (r.success || n >= 3 || !API.sesaat(r)) return r;
+      n++; await new Promise(res => setTimeout(res, 1200 * n));
     }
   };
 
@@ -143,7 +158,9 @@
     MEM.forEach((e, k) => {
       if (k.indexOf(action + '|') !== 0 || HOLD.get(k)) return;
       let ok = false; try { ok = pred(e.d); } catch (x) { ok = false; }
-      if (ok && e.s !== JSON.stringify(value)) { setEntry(k, value); emit(k); }
+      if (!ok) return;
+      const v = typeof value === 'function' ? value(JSON.parse(e.s)) : value;
+      if (v && e.s !== JSON.stringify(v)) { setEntry(k, v); emit(k); }
     });
   };
   /** Dengarkan setiap respons sukses dari server (mis. untuk melacak versi data). */

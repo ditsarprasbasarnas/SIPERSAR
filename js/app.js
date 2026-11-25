@@ -74,7 +74,7 @@
       if (!this.user || !this.user.role) return;
       const calls = this.user.role === 'ADMIN'
         ? [{ action: 'dashboardAdmin', data: {} }, { action: 'kantorList', data: {} }, { action: 'periodeList', data: {} }, { action: 'templateList', data: {} },
-          { action: 'operatorList', data: {} }, { action: 'laporanData', data: {} }, { action: 'riwayatList', data: { offset: 0, limit: 100 } }]
+          { action: 'operatorList', data: {} }, { action: 'laporanData', data: {} }]
         : [{ action: 'dashboardOperator', data: {} }, { action: 'pendataanGet', data: {} }, { action: 'pendataanRiwayat', data: {} }];
       if (this.periode && this.periode.id_template && !API.hasTemplate(this.periode.id_template)) calls.push({ action: 'templateGet', data: { id_template: this.periode.id_template } });
       API.prefetch(calls).then(() => {
@@ -92,7 +92,7 @@
         '#/admin': [['dashboardAdmin', {}], ['periodeList', {}]], '#/admin/kantor': [['kantorList', {}]], '#/admin/akun': [['operatorList', {}]],
         '#/admin/template': [['templateList', {}]], '#/admin/periode': [['periodeList', {}], ['templateList', {}]],
         '#/admin/laporan/nasional': [['laporanData', {}], ['periodeList', {}]], '#/admin/laporan/peralatan': [['laporanData', {}], ['periodeList', {}]],
-        '#/admin/laporan/kantor': [['laporanData', {}], ['periodeList', {}]], '#/admin/riwayat': [['riwayatList', { offset: 0, limit: 100 }], ['kantorList', {}], ['periodeList', {}]]
+        '#/admin/laporan/kantor': [['laporanData', {}], ['periodeList', {}]]
       };
       const c = map[href.split('?')[0]];
       if (c) API.prefetch(c.map(x => ({ action: x[0], data: x[1] })));
@@ -184,10 +184,12 @@
     /** Indikator antrean sinkronisasi di topbar. */
     paintSync(s) {
       const el = document.getElementById('syncChip'); if (!el) return;
+      clearTimeout(this._syncT);
       if (s.pending > 0) { el.className = 'chip sync on'; el.innerHTML = '<span class="spinner sm"></span>Menyinkronkan ' + s.pending + ' perubahan…'; }
       else if (Date.now() - s.lastOk < 2500) {
         el.className = 'chip sync ok'; el.innerHTML = icon('check', 'sm') + 'Tersimpan';
-        clearTimeout(this._syncT); this._syncT = setTimeout(() => { el.className = 'chip sync'; el.innerHTML = ''; }, 2500);
+        // timer hanya menyembunyikan label "Tersimpan"; bila ada antrean baru, status dihitung ulang
+        this._syncT = setTimeout(() => this.paintSync(API.sync), 2600);
       } else { el.className = 'chip sync'; el.innerHTML = ''; }
     },
 
@@ -242,7 +244,7 @@
         ['#/admin/akun', 'users', 'Akun Operator', 'akun'], ['#/admin/template', 'layout', 'Template', 'template'], ['#/admin/periode', 'calendar', 'Periode', 'periode'],
         ['sec', 'Laporan'], ['#/admin/laporan/nasional', 'chart', 'Rekap Nasional', 'lap-nasional'], ['#/admin/laporan/peralatan', 'package', 'Per Peralatan', 'lap-peralatan'],
         ['#/admin/laporan/kantor', 'building', 'Per Kantor SAR', 'lap-kantor'],
-        ['sec', 'Audit & Akun'], ['#/admin/riwayat', 'history', 'Riwayat Perubahan', 'riwayat'], ['#/profil', 'usercircle', 'Profil Admin', 'profil']
+        ['sec', 'Akun'], ['#/profil', 'usercircle', 'Profil Admin', 'profil']
       ] : [
         ['sec', 'Menu Operator'], ['#/dashboard', 'dashboard', 'Dashboard', 'dash'], ['#/pendataan', 'clipboard', 'Pendataan', 'pendataan'],
         ['#/kirim', 'send', 'Kirim Pendataan', 'kirim'], ['#/riwayat', 'history', 'Riwayat Pendataan', 'riwayat'], ['#/profil', 'usercircle', 'Profil & Akun', 'profil']
@@ -297,7 +299,7 @@
       '<div class="stack" style="gap:10px;margin-top:8px">' +
       '<div class="feat">' + icon('layout') + '<div><b>Satu Template Resmi</b><span>Nomenklatur & satuan seragam secara nasional</span></div></div>' +
       '<div class="feat">' + icon('shieldok') + '<div><b>Akses Berbasis Peran</b><span>Operator hanya mengelola data Kantor SAR sendiri</span></div></div>' +
-      '<div class="feat">' + icon('history') + '<div><b>Riwayat Perubahan</b><span>Setiap perubahan data tercatat lengkap</span></div></div></div></div>' +
+      '<div class="feat">' + icon('chart') + '<div><b>Rekapitulasi Otomatis</b><span>Rekap nasional, per peralatan & per Kantor SAR</span></div></div></div></div>' +
       '<div class="auth-right"><div><span class="chip">' + icon('shield', 'sm') + 'PORTAL SIPERSAR</span></div>' +
       '<div><h1>Masuk ke SIPERSAR</h1><p class="muted" style="margin:6px 0 0">Masukkan username dan kata sandi akun Anda untuk mengelola usulan kebutuhan sarana dan prasarana SAR.</p></div>' +
       '<form id="fLogin" class="stack" novalidate>' +
@@ -452,7 +454,7 @@
         '<div class="field"><label>Nama Lengkap (dengan gelar) <span class="req">*</span></label><input class="input" name="nama" value="' + esc(u.nama) + '" maxlength="120"><div class="field-err"></div></div>' +
         '<div class="field"><label>Jabatan <span class="req">*</span></label><input class="input" name="jabatan" value="' + esc(u.jabatan) + '" maxlength="120"><div class="field-err"></div></div>' +
         '<div class="field"><label>Email <span class="muted" style="font-weight:400">(opsional)</span></label><input class="input" name="email" type="email" value="' + esc(u.email) + '" maxlength="120"><div class="field-err"></div></div></div></div>' +
-        '<div class="card-foot"><span class="small muted" style="margin-right:auto">' + icon('shield', 'sm') + ' Perubahan tercatat di riwayat perubahan.</span><button class="btn btn-primary" type="submit">' + icon('save', 'sm') + 'Simpan Perubahan Profil</button></div></form></div>'
+        '<div class="card-foot"><span class="small muted" style="margin-right:auto">' + icon('shield', 'sm') + ' NIP, username & Kantor SAR tetap terkunci.</span><button class="btn btn-primary" type="submit">' + icon('save', 'sm') + 'Simpan Perubahan Profil</button></div></form></div>'
         : '<div class="card"><div class="card-head"><h3>' + icon('lock') + 'Kredensial</h3></div><div class="card-body"><div class="grid g3">' + ro('Username', u.username) + ro('Peran', 'Admin Direktorat') + ro('Dibuat', fmt.date(u.dibuat_pada)) + '</div></div></div>') +
       '<div class="card"><div class="card-head"><h3>' + icon('key') + 'Ganti Kata Sandi</h3></div><form id="fPw2" novalidate><div class="card-body stack" style="max-width:640px">' + pwFields(false) + '</div>' +
       '<div class="card-foot"><span class="small muted" style="margin-right:auto">Sesi di perangkat lain otomatis diakhiri setelah kata sandi diubah.</span><button class="btn btn-primary" type="submit">' + icon('key', 'sm') + 'Ubah Kata Sandi</button></div></form></div></div>';

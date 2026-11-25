@@ -63,6 +63,7 @@ h3 { font-size: 15px; line-height: 22px; }
 .btn-navy { background: var(--navy); color: #fff; } .btn-navy:hover:not(:disabled) { background: var(--navy-hover); }
 .btn-ghost { background: #fff; border-color: var(--border-strong); color: var(--text-2); } .btn-ghost:hover:not(:disabled) { background: #F1F5F9; }
 .btn-danger { background: var(--danger); color: #fff; } .btn-danger:hover:not(:disabled) { background: #B91C1C; }
+.btn-del { color: var(--err); } .btn-del:hover:not(:disabled) { background: var(--err-bg); border-color: var(--err-bd); }
 .btn-text { background: transparent; color: var(--text-2); padding: 0 8px; } .btn-text:hover { background: #F1F5F9; }
 .btn-sm { height: 30px; padding: 0 10px; font-size: 12px; gap: 6px; }
 .btn-xs { height: 26px; padding: 0 8px; font-size: 12px; gap: 4px; }

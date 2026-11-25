@@ -148,18 +148,19 @@
 
   // ---------- Penulis ----------
   // Gaya bawaan (indeks cellXfs):
-  const STYLE = { normal: 0, header: 1, cell: 2, cellBold: 3, title: 4, cellWrap: 5, cellNum: 6, cellCenter: 7, subtitle: 8, cellBoldFill: 9, cellNumBold: 10, plain: 11, plainBold: 12 };
+  const STYLE = { normal: 0, header: 1, cell: 2, cellBold: 3, title: 4, cellWrap: 5, cellNum: 6, cellCenter: 7, subtitle: 8, cellBoldFill: 9, cellNumBold: 10, plain: 11, plainBold: 12, cellZebra: 13, cellNumZebra: 14, cellWrapZebra: 15, cellCenterZebra: 16, plainMuted: 17 };
   const STYLES_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
-    '<fonts count="4"><font><sz val="10"/><name val="Arial"/></font><font><b/><sz val="10"/><name val="Arial"/></font>' +
-    '<font><b/><sz val="12"/><name val="Arial"/></font><font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Arial"/></font></fonts>' +
-    '<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
+    '<fonts count="5"><font><sz val="10"/><name val="Arial"/></font><font><b/><sz val="10"/><name val="Arial"/></font>' +
+    '<font><b/><sz val="12"/><name val="Arial"/></font><font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Arial"/></font><font><i/><sz val="9"/><color rgb="FF64748B"/><name val="Arial"/></font></fonts>' +
+    '<fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
     '<fill><patternFill patternType="solid"><fgColor rgb="FF14284B"/><bgColor indexed="64"/></patternFill></fill>' +
-    '<fill><patternFill patternType="solid"><fgColor rgb="FFE8ECF2"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFE8ECF2"/><bgColor indexed="64"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFF6F8FB"/><bgColor indexed="64"/></patternFill></fill></fills>' +
     '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>' +
     '<border><left style="thin"><color rgb="FF8A94A6"/></left><right style="thin"><color rgb="FF8A94A6"/></right><top style="thin"><color rgb="FF8A94A6"/></top><bottom style="thin"><color rgb="FF8A94A6"/></bottom><diagonal/></border></borders>' +
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
-    '<cellXfs count="13">' +
+    '<cellXfs count="18">' +
     '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
     '<xf numFmtId="0" fontId="3" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>' +
     '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top"/></xf>' +
@@ -173,11 +174,16 @@
     '<xf numFmtId="3" fontId="1" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="top"/></xf>' +
     '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
     '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+    '<xf numFmtId="0" fontId="0" fillId="4" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="top"/></xf>' +
+    '<xf numFmtId="3" fontId="0" fillId="4" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="top"/></xf>' +
+    '<xf numFmtId="0" fontId="0" fillId="4" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>' +
+    '<xf numFmtId="0" fontId="0" fillId="4" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top"/></xf>' +
+    '<xf numFmtId="0" fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
     '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
 
   /** Sheet builder sederhana */
   class SheetBuilder {
-    constructor(name) { this.name = name; this.cells = new Map(); this.merges = []; this.cols = []; this.freeze = null; this.maxRow = 0; this.maxCol = 0; this.rowHeights = {}; }
+    constructor(name) { this.name = name; this.cells = new Map(); this.merges = []; this.cols = []; this.freeze = null; this.freezeCol = 0; this.filter = null; this.maxRow = 0; this.maxCol = 0; this.rowHeights = {}; }
     set(row, col, value, style) {
       if (value === undefined || value === null) value = '';
       this.cells.set(row + ':' + col, { v: value, s: style || 0 });
@@ -186,10 +192,15 @@
     }
     merge(r1, c1, r2, c2) { this.merges.push(numToCol(c1) + r1 + ':' + numToCol(c2) + r2); return this; }
     widths(arr) { this.cols = arr; return this; }
-    freezeAt(row) { this.freeze = row; return this; }
+    freezeAt(row, col) { this.freeze = row; this.freezeCol = col || 0; return this; }
+    /** Filter otomatis Excel (dropdown saring & cari di baris header). */
+    autoFilter(r1, c1, r2, c2) { this.filter = numToCol(c1) + r1 + ':' + numToCol(c2) + Math.max(r2, r1 + 1); return this; }
     xml() {
       let x = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">';
-      if (this.freeze) x += '<sheetViews><sheetView workbookViewId="0"><pane ySplit="' + (this.freeze - 1) + '" topLeftCell="A' + this.freeze + '" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>';
+      if (this.freeze) {
+        const xs = this.freezeCol ? ' xSplit="' + this.freezeCol + '"' : '';
+        x += '<sheetViews><sheetView workbookViewId="0"><pane' + xs + ' ySplit="' + (this.freeze - 1) + '" topLeftCell="' + numToCol(this.freezeCol + 1) + this.freeze + '" activePane="' + (this.freezeCol ? 'bottomRight' : 'bottomLeft') + '" state="frozen"/></sheetView></sheetViews>';
+      }
       x += '<sheetFormatPr defaultRowHeight="15"/>';
       if (this.cols.length) x += '<cols>' + this.cols.map((w, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + w + '" customWidth="1"/>').join('') + '</cols>';
       x += '<sheetData>';
@@ -205,6 +216,7 @@
         if (rowXml) x += '<row r="' + r + '"' + (this.rowHeights[r] ? ' ht="' + this.rowHeights[r] + '" customHeight="1"' : '') + '>' + rowXml + '</row>';
       }
       x += '</sheetData>';
+      if (this.filter) x += '<autoFilter ref="' + this.filter + '"/>';
       if (this.merges.length) x += '<mergeCells count="' + this.merges.length + '">' + this.merges.map(m => '<mergeCell ref="' + m + '"/>').join('') + '</mergeCells>';
       x += '<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>';
       return x;
@@ -235,7 +247,9 @@
       '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>');
     add('docProps/core.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>SIPERSAR</dc:title><dc:creator>SIPERSAR Basarnas</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">' + new Date().toISOString().replace(/\.\d+Z$/, 'Z') + '</dcterms:created></cp:coreProperties>');
     add('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
-      sheets.map((s, i) => '<sheet name="' + xmlEsc(s.name) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>').join('') + '</sheets></workbook>');
+      sheets.map((s, i) => '<sheet name="' + xmlEsc(s.name) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>').join('') + '</sheets>' +
+      (sheets.some(s => s.filter) ? '<definedNames>' + sheets.map((s, i) => s.filter ? '<definedName name="_xlnm._FilterDatabase" localSheetId="' + i + '" hidden="1">\'' + xmlEsc(s.name.replace(/'/g, "''")) + '\'!' + s.filter.replace(/([A-Z]+)(\d+)/g, '$$$1$$$2') + '</definedName>' : '').join('') + '</definedNames>' : '') +
+      '</workbook>');
     add('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
       sheets.map((s, i) => '<Relationship Id="rId' + (i + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + (i + 1) + '.xml"/>').join('') +
       '<Relationship Id="rId' + (sheets.length + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');

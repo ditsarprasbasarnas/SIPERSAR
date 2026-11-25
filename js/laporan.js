@@ -133,7 +133,7 @@
   // REKAP PER PERALATAN
   // ============================================================
   App.route('/admin/laporan/peralatan', async function () {
-    const p = await prep(this, 'peralatan'); if (!p) return;
+    const p = await prep(this, 'peralatan', '<button class="btn btn-primary" id="btnXlsP">' + icon('download', 'sm') + 'Unduh Excel Rekap per Peralatan (.xlsx)</button>'); if (!p) return;
     const { lap, body } = p, tpl = lap.tpl;
     const items = tpl.items.filter(it => lap.agg[it.kode_item]).map(it => Object.assign({ it }, lap.agg[it.kode_item]));
     const bagList = tpl.items.filter(it => it.jenis_baris === 'BAGIAN');
@@ -162,8 +162,8 @@
             '<td><b>' + esc(x.it.nama_peralatan) + '</b>' + (x.it.subkategori ? '<div class="xs muted">' + esc(x.it.subkategori) + '</div>' : '') + '</td><td class="small">' + esc(x.it.bagian) + '<div class="xs muted">' + esc(x.it.kategori) + '</div></td>' +
             '<td class="c small">' + esc(x.it.satuan_kebutuhan) + '</td><td class="c"><span class="chip" style="height:22px">' + icon('building', 'sm') + x.jumlah_kantor + ' Kantor</span></td>' +
             '<td class="r"><b style="font-size:14px">' + fmt.num(x.total_kebutuhan) + '</b></td><td class="r">' + fmt.num(x.total_kondisi) + '</td></tr>' +
-            (isOpen ? '<tr class="detail-row"><td></td><td colspan="7" style="padding:8px 12px 16px"><div class="label-sm" style="margin-bottom:6px;color:var(--burnt)">Rincian ' + det.length + ' Kantor SAR pengusul ' + esc(x.it.nama_peralatan) + '</div><table class="tbl" style="border:1px solid var(--border);border-radius:6px"><thead><tr><th>Kantor SAR</th><th class="r">Kebutuhan (E)</th><th>Rencana Alokasi (G)</th><th class="r">Kondisi (H)</th><th>Penempatan Saat Ini (J)</th><th>Justifikasi (K)</th></tr></thead><tbody>' +
-              det.map(o => '<tr><td class="small"><b>' + esc(lap.kMap[o.id_kantor].nama_kantor) + '</b></td><td class="r"><span class="chip" style="height:22px">' + fmt.num(o.jml_kebutuhan) + ' ' + esc(x.it.satuan_kebutuhan) + '</span></td><td class="small">' + esc(o.rencana_alokasi || '–') + '</td>' +
+            (isOpen ? '<tr class="detail-row"><td></td><td colspan="7" style="padding:8px 12px 16px"><div class="label-sm" style="margin-bottom:6px;color:var(--burnt)">Rincian ' + det.length + ' Kantor SAR pengusul ' + esc(x.it.nama_peralatan) + '</div><table class="tbl" style="border:1px solid var(--border);border-radius:6px"><thead><tr><th class="c" style="width:44px">No</th><th>Kantor SAR</th><th class="r">Kebutuhan (E)</th><th>Rencana Alokasi (G)</th><th class="r">Kondisi (H)</th><th>Penempatan Saat Ini (J)</th><th>Justifikasi (K)</th></tr></thead><tbody>' +
+              det.map((o, ni) => '<tr><td class="c"><b>' + (ni + 1) + '</b></td><td class="small"><b>' + esc(lap.kMap[o.id_kantor].nama_kantor) + '</b></td><td class="r"><span class="chip" style="height:22px">' + fmt.num(o.jml_kebutuhan) + ' ' + esc(x.it.satuan_kebutuhan) + '</span></td><td class="small">' + esc(o.rencana_alokasi || '–') + '</td>' +
                 '<td class="r small">' + (o.jml_kondisi === '' ? '–' : fmt.num(o.jml_kondisi) + ' ' + esc(x.it.satuan_kondisi)) + '</td><td class="small">' + esc(o.penempatan_saat_ini || '–') + '</td><td class="small" style="max-width:340px;white-space:pre-wrap"><i>' + esc(o.justifikasi) + '</i></td></tr>').join('') + '</tbody></table></td></tr>' : '');
         }).join('') + '</tbody></table></div>' + (printing ? '' : AdminUI.pager(rows.length, page, size, n => { page = n; draw(); }, 'pgP'))
         : UI.emptyState(lap.jumlah_dikirim ? 'Tidak ada peralatan sesuai filter.' : 'Belum ada Kantor SAR berstatus DIKIRIM.', 'package');
@@ -175,13 +175,18 @@
     const top = items.slice().sort((a, b) => b.jumlah_kantor - a.jumlah_kantor || b.total_kebutuhan - a.total_kebutuhan).slice(0, 8).map(x => ({ label: x.it.nama_peralatan, value: x.jumlah_kantor }));
     $('#chartP').innerHTML = bars(top, Math.max(1, lap.jumlah_dikirim), r => r.value + ' Kantor (' + Math.round(r.value / Math.max(1, lap.jumlah_dikirim) * 100) + '%)');
     $('#btnPrint').onclick = () => { printing = true; draw(); setTimeout(() => { window.print(); printing = false; draw(); }, 100); };
+    $('#btnXlsP').onclick = (e) => {
+      if (!items.length) return toast('Belum ada usulan dari Kantor SAR berstatus DIKIRIM.', 'warn');
+      const b = e.currentTarget; busy(b, true, 'Menyusun berkas…');
+      setTimeout(() => { try { const h = Excel.downloadPeralatan(tpl, lap); toast('Excel diunduh: ' + h.item + ' nomenklatur, ' + h.baris + ' baris rincian Kantor pengusul.'); } catch (er) { toast(er.message, 'error'); } busy(b, false); }, 30);
+    };
   }, { role: 'ADMIN' });
 
   // ============================================================
   // REKAP PER KANTOR SAR
   // ============================================================
   App.route('/admin/laporan/kantor', async function () {
-    const p = await prep(this, 'kantor'); if (!p) return;
+    const p = await prep(this, 'kantor', '<button class="btn btn-primary" id="btnXlsK">' + icon('download', 'sm') + 'Unduh Excel Rekap per Kantor SAR (.xlsx)</button>'); if (!p) return;
     const { lap, body } = p, tpl = lap.tpl;
     const kirim = lap.kantor.filter(k => k.status === 'DIKIRIM');
     let idk = this.query.get('k') || (kirim[0] && kirim[0].id_kantor) || (lap.kantor[0] && lap.kantor[0].id_kantor);
@@ -194,14 +199,15 @@
     let only = true;
     body.innerHTML = '<div class="card no-print" style="margin-bottom:16px"><div class="toolbar" style="border-bottom:0"><span class="small" style="font-weight:600">' + icon('building', 'sm') + ' Pilih Satuan Kerja:</span>' +
       '<select class="input" id="selK" style="width:auto;min-width:300px;flex:1;max-width:520px">' + lap.kantor.map(x => '<option value="' + esc(x.id_kantor) + '"' + (x.id_kantor === idk ? ' selected' : '') + '>' + String(x.no_urut).padStart(2, '0') + ' · ' + esc(x.nama_kantor) + ' — ' + (x.status === 'BELUM' ? 'BELUM MENGISI' : x.status) + '</option>').join('') + '</select>' +
-      '<span class="spacer"></span><a class="btn btn-primary" href="#/admin/edit/' + esc(k.id_kantor) + '">' + icon('edit', 'sm') + 'Edit Usulan Satker (Mode Admin)</a></div></div>' +
+      '<span class="spacer"></span><button class="btn btn-ghost" id="btnXlsSatu"' + (k.status === 'DIKIRIM' ? '' : ' disabled title="Tersedia bila Kantor berstatus DIKIRIM"') + '>' + icon('sheet', 'sm') + 'Excel Format Resmi Kantor Ini</button>' +
+      '<a class="btn btn-primary" href="#/admin/edit/' + esc(k.id_kantor) + '">' + icon('edit', 'sm') + 'Edit Usulan Satker (Mode Admin)</a></div></div>' +
       '<div class="grid g3" style="margin-bottom:16px">' +
       '<div class="card card-pad"><div class="row" style="gap:12px;flex-wrap:nowrap"><div class="ico-box navy">' + icon('building') + '</div><div><div class="label-sm" style="color:var(--burnt)">Wilayah Pelayanan SAR</div><h3>' + esc(k.nama_kantor) + '</h3><div class="small muted">No. urut master ' + k.no_urut + '</div></div></div></div>' +
       '<div class="card card-pad"><div class="row" style="justify-content:space-between"><span class="label-sm">Status Pengajuan</span>' + badge(k.status) + '</div><dl class="kv small" style="margin-top:10px">' +
       '<dt>Waktu pengiriman</dt><dd>' + (pd && pd.dikirim_pada && isKirim ? fmt.dt(pd.dikirim_pada) : '–') + '</dd><dt>Operator pengirim</dt><dd>' + esc(pd && isKirim ? pd.dikirim_oleh : '–') + '</dd><dt>Terakhir disimpan</dt><dd>' + (pd ? fmt.dt(pd.disimpan_terakhir) : '–') + '</dd></dl></div>' +
       '<div class="card card-pad"><div class="row" style="justify-content:space-between"><span class="label-sm">Pengesah Dokumen Usulan</span><span class="badge b-draft nodot">Kepala Kantor SAR</span></div>' +
       '<h3 style="margin-top:8px">' + esc(pd && pd.nama_kepala || '–') + '</h3><div class="small muted tnum">NIP: ' + esc(pd && pd.nip_kepala || '–') + '</div><div class="small muted">' + esc(pd && pd.pangkat_golongan_kepala || '') + '</div></div></div>' +
-      (isKirim ? '<div class="alert alert-ok" style="margin-bottom:16px">' + icon('checkc') + '<div><b>Status usulan: RESMI & TERKIRIM</b>Usulan ini masuk kompilasi Rekapitulasi Nasional ' + esc(lap.periode.nama_periode) + '. Jika Admin menyunting isi usulan, status tetap DIKIRIM dan setiap perubahan tercatat di Riwayat Perubahan.</div></div>'
+      (isKirim ? '<div class="alert alert-ok" style="margin-bottom:16px">' + icon('checkc') + '<div><b>Status usulan: RESMI & TERKIRIM</b>Usulan ini masuk kompilasi Rekapitulasi Nasional ' + esc(lap.periode.nama_periode) + '. Jika Admin menyunting isi usulan, status tetap DIKIRIM.</div></div>'
         : '<div class="alert alert-warn" style="margin-bottom:16px">' + icon('alert') + '<div><b>Kantor ini berstatus ' + (k.status === 'BELUM' ? 'BELUM MENGISI' : k.status) + '</b>Data Kantor yang belum DIKIRIM tidak masuk rekapitulasi. Gunakan <a href="#/admin/edit/' + esc(k.id_kantor) + '">Mode Admin</a> untuk melihat atau menyunting isian sementara.</div></div>') +
       (isKirim ? '<div class="grid g3" style="margin-bottom:16px"><div class="card metric accent-navy"><span class="label-sm">Total Item Usulan</span><div class="m-val">' + n + '<small>item</small></div><div class="small muted" style="margin-top:auto">tersebar di ' + Object.keys(perBag).length + ' bagian</div></div>' +
         '<div class="card metric accent-orange" style="grid-column:span 2"><span class="label-sm">Sebaran Item per Bagian</span>' + bars(Object.keys(perBag).map(b => ({ label: b, value: perBag[b] })).sort((a, b) => b.value - a.value), Math.max(1, ...Object.values(perBag)), r => r.value + ' item') + '</div></div>' +
@@ -209,6 +215,11 @@
         '<div class="seg no-print" id="seg"><button class="on" data-v="1">Hanya yang diusulkan</button><button data-v="0">Seluruh template</button></div></div><div id="tblK"></div></div>' : '');
     $('#selK').onchange = e => App.go('#/admin/laporan/kantor?k=' + encodeURIComponent(e.target.value));
     $('#btnPrint').onclick = () => window.print();
+    $('#btnXlsK').onclick = (e) => {
+      const b = e.currentTarget; busy(b, true, 'Menyusun berkas…');
+      setTimeout(() => { try { const h = Excel.downloadRekapKantor(tpl, lap); toast('Excel diunduh: ' + h.kantor + ' Kantor DIKIRIM, ' + h.baris + ' baris rincian usulan.'); } catch (er) { toast(er.message, 'error'); } busy(b, false); }, 30);
+    };
+    if (isKirim) $('#btnXlsSatu').onclick = () => Excel.downloadKantor(tpl, k, lap.periode, itemMap, pd);
     if (!isKirim) return;
     const draw = () => { $('#tblK').innerHTML = Pendataan.fullTable(tpl, itemMap, { hanyaTerisi: only }); };
     $$('#seg button').forEach(b => b.onclick = () => { $$('#seg button').forEach(x => x.classList.remove('on')); b.classList.add('on'); only = b.dataset.v === '1'; draw(); });

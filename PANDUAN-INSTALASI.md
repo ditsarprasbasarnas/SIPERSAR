@@ -130,6 +130,17 @@ Catatan: *Kirim Pendataan*, *Identitas Kepala*, *Salin Periode*, dan *Unduh Exce
 
 **Pembaruan dari versi sebelumnya:** ganti `Kode.gs`, `Data.gs`, `Setup.gs` lalu **Terapkan → Kelola deployment → Versi baru** (tidak perlu menjalankan setup ulang), dan push ulang isi ZIP frontend.
 
+## Pembaruan revisi (Hapus Kantor, Excel rekap, perbaikan simpan)
+| Fitur | Keterangan |
+|---|---|
+| Riwayat Perubahan dihapus | Menu Admin dan pencatatan log dihapus. Bila spreadsheet lama masih punya sheet `Riwayat_Perubahan`, sheet itu boleh **dihapus manual** (klik kanan tab → Hapus). |
+| Hapus Kantor SAR | Menu **Kantor SAR → Hapus**. Bila Kantor punya akun Operator/data usulan, semuanya ikut terhapus permanen dan Admin wajib mengetik nama Kantor untuk konfirmasi. Untuk menonaktifkan sementara tanpa kehilangan data, gunakan **Ubah → Status Operasional**. |
+| Excel Rekap per Peralatan | 2 sheet: *Rekap per Peralatan* (ringkasan per item) dan *Rincian Kantor Pengusul* (bernomor 1…n per item). Filter ▼ di setiap kolom, baris judul terkunci. |
+| Excel Rekap per Kantor SAR | 2 sheet: *Ringkasan Kantor SAR* (status, pengirim, Kepala Kantor) dan *Rincian Usulan per Kantor*. Tersedia juga tombol **Excel Format Resmi Kantor Ini** (format template A–K). |
+| Perbaikan simpan | Server kini menulis paksa data ke Sheet sebelum memperbarui cache (penyebab Identitas Kepala / Simpan & Tandai kadang gagal). Browser otomatis mencoba ulang hingga 3x bila jaringan/Google sedang terganggu. |
+
+**Cara memasang revisi:** ganti `Kode.gs`, `Data.gs`, `Setup.gs` → **Terapkan → Kelola deployment → Versi baru**, lalu push ulang isi ZIP frontend (`js/config.js` tetap berisi `GAS_URL` Anda).
+
 ## Catatan pembacaan Excel master (sudah diterapkan)
 - **2 kelompok, 7 bagian, 25 kategori berhuruf, 403 baris nomenklatur, 344 item dapat diisi** (baris 6–408). Nama, ejaan, penomoran (`a.`, `- `, `1).`), dan satuan disalin **apa adanya** — termasuk ejaan asli seperti *Ekstrikasi*, *binocullar*, *Clucth*, *Shark Reppelant*, *Over Pressure Valce* — tidak ada yang dikoreksi.
 - Penomoran kategori dipertahankan seperti master: **Peralatan Pertolongan A, B, C, D, F, G** dan **Perlengkapan A, B, C, D, F** (tanpa huruf E).
@@ -141,6 +152,6 @@ Catatan: *Kirim Pendataan*, *Identitas Kepala*, *Salin Periode*, dan *Unduh Exce
 - **Kode item** dibuat stabil dari hierarki nama (bukan nomor baris) agar data cocok saat disalin antarperiode.
 
 ## Batasan Google Apps Script
-- Data `Riwayat_Perubahan` terus bertambah; arsipkan per periode bila spreadsheet mendekati batas 10 juta sel.
+- Fitur Riwayat Perubahan sudah dihapus; server tidak lagi mencatat log sehingga ukuran database hanya bertambah sesuai data usulan.
 - Sesi login berakhir setelah 2 jam tanpa aktivitas.
 - Login dikunci 5 menit setelah 5 kali gagal.

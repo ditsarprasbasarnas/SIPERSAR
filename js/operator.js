@@ -26,7 +26,7 @@
             UI.fieldErrors(f, err); if (Object.keys(err).length) return false;
             await Pendataan.flush(btn);
             busy(btn, true, 'Menyimpan…');
-            const r = await API.call('pendataanSimpanKepala', Object.assign({}, ids, v));
+            const r = await API.callRetry('pendataanSimpanKepala', Object.assign({}, ids, v));
             busy(btn, false);
             if (!r.success) { UI.fieldErrors(f, r.detail); toast(r.message, 'error'); return false; }
             toast(r.message, r.message.indexOf('DRAFT') >= 0 ? 'warn' : 'success');

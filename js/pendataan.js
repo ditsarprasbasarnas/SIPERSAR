@@ -46,7 +46,17 @@
       API.put('pendataanGet', kd, raw);
       // 2) Sinkron latar belakang (berurutan, versi data terbaru dipakai saat giliran tiba)
       return API.sync.push(async () => {
-        const res = await API.call(opts.action, opts.payload(this.versi[pk]), { silent: true });
+        let res, coba = 0;
+        for (;;) {
+          res = await API.call(opts.action, opts.payload(this.versi[pk]), { silent: true });
+          if (res.success) break;
+          // konflik versi akibat simpanan akun ini sendiri (mis. respons sebelumnya terputus) → pakai versi server lalu ulangi
+          const sendiri = res.code === 'VERSI_KONFLIK' && res.detail && res.detail.disimpan_oleh === App.user.username;
+          if (coba >= 3 || !(sendiri || API.sesaat(res))) break;
+          coba++;
+          if (sendiri) this.versi[pk] = Number(res.detail.versi_server) || 0;
+          await new Promise(ok => setTimeout(ok, sendiri ? 50 : 1200 * coba));
+        }
         const sisa = API.hold('pendataanGet', kd, false);
         if (res.success) {
           if (res.data && res.data.pendataan) this.versi[pk] = Number(res.data.pendataan.versi_data) || 0;
@@ -97,12 +107,12 @@
         crumbs: admin ? '<a href="#/admin/laporan/kantor?k=' + esc(d.kantor.id_kantor) + '">Laporan per Kantor SAR</a> › <b>Mode Penyuntingan Admin</b>' : '',
         eyebrow: this.statusBadge(d) + '<span class="muted" style="letter-spacing:0;text-transform:none;font-weight:500">' + esc(d.periode.nama_periode) + ' · Template v' + esc(d.periode.template_versi) + '</span>',
         title: admin ? d.kantor.nama_kantor + ' · Form Usulan' : 'Pendataan Usulan Kebutuhan Sarana & Peralatan SAR',
-        desc: admin ? 'Penyuntingan isi usulan oleh Admin Direktorat. Status pendataan tidak berubah dan setiap perubahan tercatat di Riwayat Perubahan.'
+        desc: admin ? 'Penyuntingan isi usulan oleh Admin Direktorat. Status pendataan tidak berubah.'
           : 'Isi usulan per kategori sesuai template resmi. Tandai setiap kategori <b>Selesai Ditinjau</b> (termasuk kategori tanpa usulan), lengkapi identitas Kepala Kantor, lalu kirim ke Direktorat.',
         actions: !admin && d.periode.batas_pengisian ? '<div class="card" style="padding:10px 14px;display:flex;gap:10px;align-items:center">' + icon('clock') + '<div><div class="label-sm">Batas Pengisian</div><b>' + fmt.dateOnly(d.periode.batas_pengisian) + '</b>' + (sisa !== null && d.dapat_ubah ? ' <span class="small" style="color:var(--burnt)">(' + (sisa >= 0 ? 'sisa ' + sisa + ' hari' : 'lewat ' + (-sisa) + ' hari') + ')</span>' : '') + '</div></div>' : ''
       });
       let banner = '';
-      if (admin) banner = '<div class="alert alert-navy" style="margin-bottom:16px">' + icon('shieldok') + '<div><b>MODE PENYUNTINGAN ADMINISTRATOR DIREKTORAT</b>Koreksi Admin tidak mengubah status (' + esc(d.pendataan ? d.pendataan.status : 'belum ada data') + '). Seluruh perubahan sel direkam di Riwayat Perubahan dengan akun Admin.</div></div>';
+      if (admin) banner = '<div class="alert alert-navy" style="margin-bottom:16px">' + icon('shieldok') + '<div><b>MODE PENYUNTINGAN ADMINISTRATOR DIREKTORAT</b>Koreksi Admin tidak mengubah status (' + esc(d.pendataan ? d.pendataan.status : 'belum ada data') + ').</div></div>';
       else if (!d.dapat_ubah) banner = '<div class="alert alert-warn" style="margin-bottom:16px">' + icon('lock') + '<div><b>Mode baca-saja</b>' + esc(d.alasan) + '</div></div>';
       else if (d.pendataan && d.pendataan.status === 'DIKIRIM') banner = '<div class="alert alert-ok" style="margin-bottom:16px">' + icon('checkc') + '<div><b>Pendataan sudah DIKIRIM</b>Jika Anda menyimpan perubahan apa pun, status kembali menjadi DRAFT dan Kantor Anda keluar dari rekap nasional sampai dikirim ulang.</div></div>';
 
@@ -218,7 +228,7 @@
         desc: esc(k.kelompok) + ' · Bagian ' + esc(k.bagian) + ' · ' + k.itemKodes.length + ' item dapat diisi. Kolom nama dan satuan terkunci sesuai template resmi.',
         actions: '<a class="btn btn-ghost" href="' + ctx.base + '">' + icon('arrowl', 'sm') + 'Daftar Kategori</a>'
       }) +
-        (admin ? '<div class="alert alert-navy" style="margin-bottom:12px">' + icon('shieldok') + '<div><b>MODE PENYUNTINGAN ADMINISTRATOR</b>Menyunting usulan ' + esc(d.kantor.nama_kantor) + '. Status tetap ' + esc(d.pendataan ? d.pendataan.status : 'DRAFT (dibuat saat simpan)') + '; perubahan tercatat di Riwayat Perubahan.</div></div>' : '') +
+        (admin ? '<div class="alert alert-navy" style="margin-bottom:12px">' + icon('shieldok') + '<div><b>MODE PENYUNTINGAN ADMINISTRATOR</b>Menyunting usulan ' + esc(d.kantor.nama_kantor) + '. Status tetap ' + esc(d.pendataan ? d.pendataan.status : 'DRAFT (dibuat saat simpan)') + '.</div></div>' : '') +
         (!editable ? '<div class="alert alert-warn" style="margin-bottom:12px">' + icon('lock') + '<div><b>Mode baca-saja</b>' + esc(d.alasan) + '</div></div>' : '') +
         '<div id="konflik"></div>' +
         '<div class="card" style="margin-bottom:12px"><div class="toolbar" style="border-bottom:0">' +
@@ -461,7 +471,10 @@
     const pk = data.periode.id_periode + '|' + data.kantor.id_kantor, v = Number(data.pendataan.versi_data) || 0;
     if (P.versi[pk] !== undefined && v > P.versi[pk]) P.versi[pk] = v;
     if (['pendataanSimpanKepala', 'pendataanKirim', 'pendataanSimpanKategori', 'pendataanSetReview'].indexOf(action) >= 0) {
-      API.putMatching('pendataanGet', x => x && x.periode && x.kantor && x.periode.id_periode === data.periode.id_periode && x.kantor.id_kantor === data.kantor.id_kantor, data);
+      const cocok = x => x && x.periode && x.kantor && x.periode.id_periode === data.periode.id_periode && x.kantor.id_kantor === data.kantor.id_kantor;
+      API.putMatching('pendataanGet', cocok, data);
+      // dashboard Operator ikut diperbarui seketika (identitas Kepala, status, tanda tinjau)
+      API.putMatching('dashboardOperator', cocok, old => Object.assign(old, { pendataan: data.pendataan, review: data.review, dapat_ubah: data.dapat_ubah, alasan: data.alasan }));
     }
   });
 

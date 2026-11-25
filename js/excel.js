@@ -96,6 +96,39 @@
     return s;
   }
 
+  // ------------------------------------------------------------
+  // Tabel data datar yang mudah dibaca, disaring & dicari di Excel
+  // ------------------------------------------------------------
+  /** cols: [{h: judul, w: lebar, t: 'num'|'wrap'|'center'|'text'}], rows: array nilai per kolom */
+  function sheetTabel(nama, judul, sub, cols, rows, opts) {
+    opts = opts || {};
+    const s = new X.SheetBuilder(nama), n = cols.length;
+    s.set(1, 1, judul, S.title).merge(1, 1, 1, n);
+    s.set(2, 1, sub, S.subtitle).merge(2, 1, 2, n);
+    s.set(3, 1, 'Petunjuk: klik tombol ▼ pada judul kolom untuk menyaring atau mencari (Data → Filter). Baris judul tetap terlihat saat digulir.', S.plainMuted).merge(3, 1, 3, n);
+    const H = 5;
+    cols.forEach((c, i) => s.set(H, i + 1, c.h, S.header));
+    s.rowHeights[H] = 32;
+    rows.forEach((row, ri) => {
+      const z = ri % 2 === 1;
+      cols.forEach((c, ci) => {
+        let v = row[ci]; if (v === undefined || v === null) v = '';
+        const st = c.t === 'num' ? (z ? S.cellNumZebra : S.cellNum) : c.t === 'wrap' ? (z ? S.cellWrapZebra : S.cellWrap) : c.t === 'center' ? (z ? S.cellCenterZebra : S.cellCenter) : (z ? S.cellZebra : S.cell);
+        s.set(H + 1 + ri, ci + 1, c.t === 'num' && v !== '' ? Number(v) : (typeof v === 'number' ? v : String(v)), st);
+      });
+    });
+    if (!rows.length) s.set(H + 1, 1, 'Belum ada data.', S.plainMuted);
+    let r = H + 1 + Math.max(rows.length, 1);
+    if (opts.total) { r++; opts.total.forEach(t => { s.set(r, t.col, t.v, typeof t.v === 'number' ? S.cellNumBold : S.cellBoldFill); }); r++; }
+    s.widths(cols.map(c => c.w)).freezeAt(H + 1, opts.freezeCol || 0).autoFilter(H, 1, H + Math.max(rows.length, 1), n);
+    return s;
+  }
+  function jalurItem(tpl, it) {
+    const kel = it.kelompok || '', bag = it.bagian || '', kat = it.kategori && it.kategori !== (it.bagian || '').replace(/^\S+\s/, '') ? it.kategori : '';
+    return { kel, bag, kat, sub: it.subkategori || '' };
+  }
+  function infoLap(lap) { return lap.periode.nama_periode + ' · ' + lap.jumlah_dikirim + ' Kantor SAR berstatus DIKIRIM (dari ' + lap.jumlah_kantor_aktif + ' aktif) · diunduh ' + tanggalCetak(); }
+
   function fileSafe(s) { return String(s).replace(/[^\w\- ]+/g, '').replace(/\s+/g, '_').substring(0, 60); }
 
   const Excel = {
@@ -111,6 +144,68 @@
         sheets.push(sheetKantor(tpl, k, lap.periode, byK[k.id_kantor] || {}, k.pendataan, String(k.no_urut).padStart(2, '0') + ' ' + namaPendekKantor(k.nama_kantor)));
       });
       X.download(X.buildWorkbook(sheets), 'Rekap_Nasional_SIPERSAR_' + fileSafe(lap.periode.nama_periode) + '.xlsx');
+    },
+    /** Rekap per Peralatan: ringkasan per item + rincian Kantor pengusul bernomor. */
+    downloadPeralatan(tpl, lap) {
+      const kMap = lap.kMap, items = tpl.items.filter(it => lap.agg[it.kode_item]);
+      const ringkas = items.map((it, i) => {
+        const a = lap.agg[it.kode_item], j = jalurItem(tpl, it);
+        const pengusul = (lap.byItem[it.kode_item] || []).slice().sort((x, y) => kMap[x.id_kantor].no_urut - kMap[y.id_kantor].no_urut);
+        return [i + 1, j.kel, j.bag, it.kategori, j.sub, it.nama_peralatan, it.satuan_kebutuhan, a.jumlah_kantor, a.total_kebutuhan, a.total_kondisi,
+          pengusul.map(o => namaPendekKantor(kMap[o.id_kantor].nama_kantor)).join(', ')];
+      });
+      const s1 = sheetTabel('Rekap per Peralatan', 'REKAPITULASI KEBUTUHAN PER NOMENKLATUR SARANA & PERALATAN SAR', infoLap(lap), [
+        { h: 'No', w: 6, t: 'center' }, { h: 'Kelompok', w: 22, t: 'wrap' }, { h: 'Bagian', w: 26, t: 'wrap' }, { h: 'Kategori', w: 24, t: 'wrap' }, { h: 'Sub Kategori', w: 26, t: 'wrap' },
+        { h: 'Nama Sarana / Peralatan', w: 46, t: 'wrap' }, { h: 'Satuan', w: 9, t: 'center' }, { h: 'Jumlah Kantor SAR Pengusul', w: 13, t: 'num' },
+        { h: 'Total Kebutuhan (E)', w: 13, t: 'num' }, { h: 'Total Kondisi Saat Ini (H)', w: 13, t: 'num' }, { h: 'Kantor SAR Pengusul', w: 60, t: 'wrap' }
+      ], ringkas, { freezeCol: 0, total: [{ col: 6, v: 'Jumlah nomenklatur diusulkan: ' + items.length }] });
+      const rinci = [];
+      items.forEach(it => {
+        const det = (lap.byItem[it.kode_item] || []).slice().sort((x, y) => kMap[x.id_kantor].no_urut - kMap[y.id_kantor].no_urut);
+        det.forEach((o, i) => rinci.push([rinci.length + 1, it.nama_peralatan, it.satuan_kebutuhan, i + 1, det.length, kMap[o.id_kantor].nama_kantor,
+          o.jml_kebutuhan, o.rencana_alokasi, o.jml_kondisi, o.penempatan_saat_ini, o.justifikasi, it.bagian, it.kategori]));
+      });
+      const s2 = sheetTabel('Rincian Kantor Pengusul', 'RINCIAN KANTOR SAR PENGUSUL PER PERALATAN', infoLap(lap) + ' · Saring kolom "Nama Sarana / Peralatan" untuk melihat daftar pengusul bernomor.', [
+        { h: 'No', w: 6, t: 'center' }, { h: 'Nama Sarana / Peralatan', w: 42, t: 'wrap' }, { h: 'Satuan', w: 9, t: 'center' }, { h: 'No. Pengusul', w: 10, t: 'center' },
+        { h: 'Jumlah Kantor Pengusul', w: 11, t: 'num' }, { h: 'Kantor SAR', w: 30, t: 'wrap' }, { h: 'Kebutuhan (E)', w: 11, t: 'num' }, { h: 'Rencana Alokasi Penempatan (G)', w: 30, t: 'wrap' },
+        { h: 'Kondisi Saat Ini (H)', w: 11, t: 'num' }, { h: 'Penempatan Saat Ini (J)', w: 26, t: 'wrap' }, { h: 'Justifikasi Kebutuhan (K)', w: 54, t: 'wrap' },
+        { h: 'Bagian', w: 24, t: 'wrap' }, { h: 'Kategori', w: 22, t: 'wrap' }
+      ], rinci, { freezeCol: 2 });
+      X.download(X.buildWorkbook([s1, s2]), 'Rekap_per_Peralatan_' + fileSafe(lap.periode.nama_periode) + '.xlsx');
+      return { item: items.length, baris: rinci.length };
+    },
+    /** Rekap per Kantor SAR: ringkasan seluruh Kantor + rincian usulan Kantor DIKIRIM. */
+    downloadRekapKantor(tpl, lap) {
+      const kantor = lap.kantor.slice().sort((a, b) => a.no_urut - b.no_urut);
+      const ringkas = kantor.map((k, i) => {
+        const pd = k.pendataan || {}, items = k.status === 'DIKIRIM' ? Object.values(lap.byKantor[k.id_kantor] || {}) : [];
+        return [i + 1, k.no_urut, k.nama_kantor, k.status === 'BELUM' ? 'BELUM MENGISI' : k.status, k.status === 'DIKIRIM' ? UI.fmt.dt(pd.dikirim_pada) : '', k.status === 'DIKIRIM' ? pd.dikirim_oleh || '' : '',
+          pd.nama_kepala || '', pd.nip_kepala || '', pd.pangkat_golongan_kepala || '', k.status === 'DIKIRIM' ? items.length : '', k.status === 'DIKIRIM' ? items.reduce((t, o) => t + (Number(o.jml_kebutuhan) || 0), 0) : ''];
+      });
+      const s1 = sheetTabel('Ringkasan Kantor SAR', 'REKAPITULASI USULAN PER KANTOR SAR', infoLap(lap) + ' · Hanya Kantor berstatus DIKIRIM yang dihitung dalam rekap.', [
+        { h: 'No', w: 6, t: 'center' }, { h: 'No. Urut Master', w: 9, t: 'center' }, { h: 'Kantor SAR', w: 32, t: 'wrap' }, { h: 'Status', w: 15, t: 'center' },
+        { h: 'Waktu Pengiriman', w: 22, t: 'text' }, { h: 'Dikirim Oleh', w: 16, t: 'text' }, { h: 'Kepala Kantor', w: 30, t: 'wrap' }, { h: 'NIP Kepala', w: 21, t: 'text' },
+        { h: 'Pangkat / Golongan', w: 24, t: 'wrap' }, { h: 'Jumlah Item Diusulkan', w: 12, t: 'num' }, { h: 'Total Kuantitas Kebutuhan (lintas satuan)', w: 15, t: 'num' }
+      ], ringkas, { freezeCol: 3, total: [{ col: 3, v: 'DIKIRIM: ' + lap.jumlah_dikirim + ' dari ' + kantor.length + ' Kantor SAR' }] });
+      const rinci = [];
+      kantor.filter(k => k.status === 'DIKIRIM').forEach(k => {
+        const m = lap.byKantor[k.id_kantor] || {};
+        let n = 0;
+        tpl.items.forEach(it => {
+          const o = m[it.kode_item]; if (!o) return; n++;
+          const j = jalurItem(tpl, it);
+          rinci.push([rinci.length + 1, k.no_urut, k.nama_kantor, n, j.kel, j.bag, it.kategori, j.sub, it.nama_peralatan, o.jml_kebutuhan, it.satuan_kebutuhan, o.rencana_alokasi,
+            o.jml_kondisi, it.satuan_kondisi, o.penempatan_saat_ini, o.justifikasi]);
+        });
+      });
+      const s2 = sheetTabel('Rincian Usulan per Kantor', 'RINCIAN USULAN KEBUTUHAN PER KANTOR SAR', infoLap(lap) + ' · Saring kolom "Kantor SAR" untuk melihat usulan satu Kantor.', [
+        { h: 'No', w: 6, t: 'center' }, { h: 'No. Urut Kantor', w: 8, t: 'center' }, { h: 'Kantor SAR', w: 28, t: 'wrap' }, { h: 'No. Item di Kantor', w: 9, t: 'center' },
+        { h: 'Kelompok', w: 20, t: 'wrap' }, { h: 'Bagian', w: 24, t: 'wrap' }, { h: 'Kategori', w: 22, t: 'wrap' }, { h: 'Sub Kategori', w: 24, t: 'wrap' },
+        { h: 'Nama Sarana / Peralatan', w: 42, t: 'wrap' }, { h: 'Kebutuhan (E)', w: 11, t: 'num' }, { h: 'Satuan (F)', w: 9, t: 'center' }, { h: 'Rencana Alokasi Penempatan (G)', w: 28, t: 'wrap' },
+        { h: 'Kondisi Saat Ini (H)', w: 11, t: 'num' }, { h: 'Satuan (I)', w: 9, t: 'center' }, { h: 'Penempatan Saat Ini (J)', w: 24, t: 'wrap' }, { h: 'Justifikasi Kebutuhan (K)', w: 54, t: 'wrap' }
+      ], rinci, { freezeCol: 3 });
+      X.download(X.buildWorkbook([s1, s2]), 'Rekap_per_Kantor_SAR_' + fileSafe(lap.periode.nama_periode) + '.xlsx');
+      return { kantor: lap.jumlah_dikirim, baris: rinci.length };
     },
     downloadTemplateKosong(tpl, nama) {
       const s = new X.SheetBuilder('sarpalsar ' + new Date().getFullYear());

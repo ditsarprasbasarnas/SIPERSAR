@@ -1,7 +1,7 @@
 /* ============================================================
    SIPERSAR — admin.js
    Dashboard nasional, Kantor SAR, Akun Operator, Template, Periode,
-   Riwayat Perubahan, dan mode sunting usulan oleh Admin.
+   dan mode sunting usulan oleh Admin.
    ============================================================ */
 (function (global) {
   'use strict';
@@ -130,10 +130,32 @@
       $('#tbl').innerHTML = '<div class="table-wrap"><table class="tbl"><thead><tr><th class="c">No. Urut</th><th>Nama Kantor SAR</th><th class="c">Operator Aktif</th><th class="c">Status</th><th>Diubah</th><th class="c">Aksi</th></tr></thead><tbody>' +
         (rows.length ? rows.map(k => '<tr><td class="c"><b>' + String(k.no_urut).padStart(2, '0') + '</b></td><td><b>' + esc(k.nama_kantor) + '</b></td><td class="c">' + k.operator_aktif + ' <span class="muted xs">/ ' + k.jumlah_operator + '</span></td>' +
           '<td class="c">' + badge(k.aktif ? 'AKTIF' : 'NONAKTIF') + '</td><td class="small">' + fmt.dt(k.diubah_pada) + '</td>' +
-          '<td class="c"><button class="btn btn-ghost btn-sm" data-ed="' + esc(k.id_kantor) + '">' + icon('edit', 'sm') + 'Ubah</button></td></tr>').join('') : '<tr><td colspan="6">' + UI.emptyState('Belum ada Kantor SAR.', 'building') + '</td></tr>') + '</tbody></table></div>';
+          '<td class="c nowrap"><button class="btn btn-ghost btn-sm" data-ed="' + esc(k.id_kantor) + '">' + icon('edit', 'sm') + 'Ubah</button> ' +
+          '<button class="btn btn-ghost btn-sm btn-del" data-del="' + esc(k.id_kantor) + '">' + icon('trash', 'sm') + 'Hapus</button></td></tr>').join('') : '<tr><td colspan="6">' + UI.emptyState('Belum ada Kantor SAR.', 'building') + '</td></tr>') + '</tbody></table></div>';
       $$('[data-ed]').forEach(b => b.onclick = () => form(list.find(k => k.id_kantor === b.dataset.ed)));
+      $$('[data-del]').forEach(b => b.onclick = () => hapus(list.find(k => k.id_kantor === b.dataset.del)));
     };
     $('#q').oninput = UI.debounce(draw); draw();
+    const hapus = (k) => {
+      const adaData = k.jumlah_operator > 0 || k.jumlah_pendataan > 0;
+      UI.modal({ title: 'Hapus ' + k.nama_kantor + '?', sub: 'Tindakan permanen — tidak dapat dibatalkan', icon: 'trash', iconCls: 'orange',
+        body: (adaData
+          ? '<div class="alert alert-err" style="margin-bottom:12px">' + icon('alert') + '<div><b>Kantor ini memiliki data yang ikut terhapus</b><ul class="small" style="margin:4px 0 0;padding-left:18px">' +
+            '<li>' + k.jumlah_operator + ' akun Operator (tidak dapat login lagi)</li><li>' + k.jumlah_pendataan + ' data pendataan periode (' + k.jumlah_item + ' item usulan), termasuk yang sudah DIKIRIM</li></ul></div></div>' +
+            '<p class="small" style="margin:0 0 6px">Bila hanya ingin menghentikan sementara tanpa kehilangan data, gunakan <b>Ubah → Status Operasional: nonaktif</b>.</p>' +
+            '<div class="field"><label>Ketik <b>' + esc(k.nama_kantor) + '</b> untuk konfirmasi <span class="req">*</span></label><input class="input" id="konfHapus" name="konfirmasi" autocomplete="off"><div class="field-err"></div></div>'
+          : '<p>Kantor ini belum memiliki akun Operator maupun data pendataan. Nomor urut Kantor lain akan dirapikan otomatis.</p>'),
+        onOpen: m => { const inp = m.querySelector('#konfHapus'); const btn = m.querySelector('#btnHapusK'); if (inp && btn) { btn.disabled = true; inp.oninput = () => { btn.disabled = inp.value.trim() !== k.nama_kantor; }; } },
+        buttons: [{ label: 'Batal' }, { label: 'Hapus Permanen', cls: 'btn-danger', icon: 'trash', id: 'btnHapusK', onClick: async (btn) => {
+          const inp = $('#konfHapus');
+          busy(btn, true, 'Menghapus…');
+          const r2 = await API.call('kantorHapus', { id_kantor: k.id_kantor, konfirmasi: inp ? inp.value.trim() : '' });
+          busy(btn, false);
+          if (!r2.success) { toast(r2.message, 'error'); return false; }
+          toast(r2.message);
+          await API.read('kantorList', {}, { force: true }); App.render(true);
+        } }] });
+    };
     const form = (k) => {
       UI.modal({ title: k ? 'Ubah Kantor SAR' : 'Tambah Kantor SAR Baru', sub: 'Direktorat Sarana dan Prasarana Basarnas', icon: 'building',
         body: '<form id="fK" class="stack" novalidate><div class="field"><label>Nomor Urut Master <span class="req">*</span></label><input class="input" type="number" min="1" max="' + (list.length + (k ? 0 : 1)) + '" name="no_urut" value="' + (k ? k.no_urut : list.length + 1) + '"><div class="field-hint">Menentukan posisi pada seluruh rekapitulasi. Kantor lain digeser otomatis.</div><div class="field-err"></div></div>' +
@@ -345,47 +367,6 @@
     };
     $('#btnNew').onclick = () => { if (!tpls.length) return toast('Belum ada template.', 'error'); form(null); };
     $$('[data-ed]').forEach(b => b.onclick = () => form(list.find(x => x.id_periode === b.dataset.ed)));
-  }, { role: 'ADMIN' });
-
-  // ============================================================
-  // RIWAYAT PERUBAHAN
-  // ============================================================
-  const AKSI = { TAMBAH_USULAN: 'Tambah usulan', UBAH_USULAN: 'Ubah usulan', HAPUS_USULAN: 'Hapus usulan', TANDAI_DITINJAU: 'Tandai ditinjau', BATAL_DITINJAU: 'Batal ditinjau', KIRIM: 'Kirim', STATUS: 'Status berubah',
-    UBAH_KEPALA: 'Ubah Kepala Kantor', SALIN_PERIODE: 'Salin periode', MULAI_PENDATAAN: 'Mulai pendataan', REGISTRASI: 'Registrasi', UBAH_PROFIL: 'Ubah profil', GANTI_PASSWORD: 'Ganti sandi',
-    RESET_PASSWORD: 'Reset sandi', AKTIFKAN_AKUN: 'Aktifkan akun', NONAKTIFKAN_AKUN: 'Nonaktifkan akun', TAMBAH_KANTOR: 'Tambah Kantor', UBAH_KANTOR: 'Ubah Kantor', UNGGAH_TEMPLATE: 'Unggah template',
-    BUAT_PERIODE: 'Buat periode', UBAH_PERIODE: 'Ubah periode', BUKA_PERIODE: 'Buka periode', TUTUP_PERIODE: 'Tutup periode' };
-  App.route('/admin/riwayat', async function () {
-    const c = this.shell('riwayat');
-    c.innerHTML = UI.loading();
-    const [rk, po] = await Promise.all([API.read('kantorList', {}), periodeOptions('')]);
-    const kantor = rk.success ? rk.data : [];
-    c.innerHTML = this.pageHead({ eyebrow: 'Audit', title: 'Riwayat Perubahan Data', desc: 'Log seluruh perubahan oleh Admin maupun Operator: waktu, akun, Kantor SAR, item peralatan, nilai sebelum dan sesudah.' }) +
-      '<div class="card"><div class="toolbar">' +
-      '<select class="input" id="fk" style="width:auto;max-width:230px"><option value="">Semua Kantor SAR</option>' + kantor.map(k => '<option value="' + esc(k.id_kantor) + '">' + esc(k.nama_kantor) + '</option>').join('') + '</select>' +
-      '<select class="input" id="fp" style="width:auto;max-width:200px"><option value="">Semua periode</option>' + po.html + '</select>' +
-      '<select class="input" id="fu" style="width:auto;max-width:180px"><option value="">Semua akun</option></select>' +
-      '<select class="input" id="fa" style="width:auto;max-width:180px"><option value="">Semua aksi</option>' + Object.keys(AKSI).map(a => '<option value="' + a + '">' + AKSI[a] + '</option>').join('') + '</select>' +
-      '<input class="input" type="date" id="fd" style="width:auto" title="Dari tanggal"><input class="input" type="date" id="fs" style="width:auto" title="Sampai tanggal">' +
-      '<div class="input-icon" style="flex:1;min-width:180px">' + icon('search', 'sm') + '<input class="input" id="fq" placeholder="Cari item / nilai…"></div></div><div id="tbl">' + UI.loading() + '</div></div>';
-    let offset = 0; const limit = 100; let usersLoaded = false;
-    const load = async () => {
-      $('#tbl').innerHTML = UI.loading();
-      const r = await API.read('riwayatList', { id_kantor: $('#fk').value, id_periode: $('#fp').value, username: $('#fu').value, aksi: $('#fa').value, dari: $('#fd').value, sampai: $('#fs').value, q: $('#fq').value, offset, limit });
-      if (!r.success) return err($('#tbl'), r.message);
-      const d = r.data;
-      if (!usersLoaded) { $('#fu').innerHTML += d.usernames.map(u => '<option>' + esc(u) + '</option>').join(''); usersLoaded = true; }
-      $('#tbl').innerHTML = '<div class="table-wrap"><table class="tbl"><thead><tr><th>Waktu</th><th>Akun</th><th>Kantor SAR</th><th>Item / Objek</th><th>Aksi</th><th class="c">Kolom</th><th>Nilai Sebelum</th><th>Nilai Sesudah</th></tr></thead><tbody>' +
-        (d.rows.length ? d.rows.map(x => '<tr><td class="small nowrap">' + fmt.dt(x.waktu) + '<div class="xs muted">' + esc(x.periode) + '</div></td><td class="small"><b>' + esc(x.username) + '</b><div class="xs muted">' + esc(x.role) + '</div></td>' +
-          '<td class="small">' + esc(x.kantor || '–') + '</td><td class="small" style="max-width:260px">' + esc(x.nama_item || '–') + '</td><td><span class="badge nodot ' + (/HAPUS|NONAKTIF|TUTUP/.test(x.aksi) ? 'b-tutup' : /KIRIM|TAMBAH|BUKA/.test(x.aksi) ? 'b-kirim' : 'b-draft') + '">' + esc(AKSI[x.aksi] || x.aksi) + '</span></td>' +
-          '<td class="c"><span class="kode">' + esc(x.field) + '</span></td><td class="small" style="max-width:220px;color:var(--err);white-space:pre-wrap">' + esc(x.nilai_lama) + '</td><td class="small" style="max-width:220px;color:var(--ok);white-space:pre-wrap">' + esc(x.nilai_baru) + '</td></tr>').join('')
-          : '<tr><td colspan="8">' + UI.emptyState('Tidak ada riwayat sesuai filter.', 'history') + '</td></tr>') + '</tbody></table></div>' +
-        '<div class="pager"><span>Menampilkan ' + (d.total ? offset + 1 : 0) + '–' + Math.min(d.total, offset + limit) + ' dari ' + fmt.num(d.total) + ' catatan</span><div class="row" style="gap:4px"><button class="btn btn-ghost btn-xs" id="pv" ' + (offset ? '' : 'disabled') + '>' + icon('left', 'sm') + 'Sebelumnya</button><button class="btn btn-ghost btn-xs" id="nx" ' + (offset + limit < d.total ? '' : 'disabled') + '>Berikutnya' + icon('right', 'sm') + '</button></div></div>';
-      $('#pv').onclick = () => { offset = Math.max(0, offset - limit); load(); };
-      $('#nx').onclick = () => { offset += limit; load(); };
-    };
-    ['fk', 'fp', 'fu', 'fa', 'fd', 'fs'].forEach(id => $('#' + id).onchange = () => { offset = 0; load(); });
-    $('#fq').oninput = UI.debounce(() => { offset = 0; load(); }, 400);
-    load();
   }, { role: 'ADMIN' });
 
   // ============================================================
